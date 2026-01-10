@@ -22,12 +22,19 @@ class UploadWorker(
         val tripId = inputData.getString("tripId") ?: return Result.failure()
         val filePaths = inputData.getStringArray("filePaths") ?: return Result.failure()
         val labels = inputData.getStringArray("labels") ?: return Result.failure()
-        val photoType = inputData.getString("photoType") ?: "start" // "start" or "completion"
+        val photoType = inputData.getString("photoType") ?: "start" // "start", "completion", or "expense_receipt"
         val updateStatus = inputData.getBoolean("updateStatus", true) // Whether to update trip status
+        val expenseId = inputData.getString("expenseId") // For expense receipt uploads
 
         val storageRef = FirebaseStorage.getInstance().reference
         val db = FirebaseFirestore.getInstance()
         val uploadedUrls = mutableMapOf<String, String>()
+
+        // Set progress data so MediaManagerScreen can display upload type even while in progress
+        setProgress(workDataOf(
+            "photoType" to photoType,
+            "tripId" to tripId
+        ))
 
         try {
             // 2. Loop through files
@@ -42,10 +49,10 @@ class UploadWorker(
                     val compressedData = compressImage(file)
 
                     // Upload to Storage - different path based on photo type
-                    val storagePath = if (photoType == "completion") {
-                        "trips/$tripId/completion_photos/$label.jpg"
-                    } else {
-                        "trips/$tripId/start_photos/$label.jpg"
+                    val storagePath = when (photoType) {
+                        "completion" -> "trips/$tripId/completion_photos/$label.jpg"
+                        "expense_receipt" -> "trips/$tripId/expenses/${expenseId}_receipt.jpg"
+                        else -> "trips/$tripId/start_photos/$label.jpg"
                     }
                     val fileRef = storageRef.child(storagePath)
                     fileRef.putBytes(compressedData).await() // Upload the small byte array
@@ -56,23 +63,49 @@ class UploadWorker(
             }
 
             // 3. Update Firestore (Only after all uploads are done)
-            val updates = mutableMapOf<String, Any>()
-            
-            if (photoType == "completion") {
-                updates["completionPhotos"] = uploadedUrls
-                if (updateStatus) {
-                    updates["status"] = "AWAITING_VERIFICATION"
+            if (photoType == "expense_receipt" && expenseId != null) {
+                // Update the specific expense in the expenses list
+                val tripDoc = db.collection(Constants.COLLECTION_TRIPS).document(tripId).get().await()
+                val expenses = tripDoc.get("expenses") as? List<Map<String, Any>> ?: emptyList()
+                
+                val updatedExpenses = expenses.map { expense ->
+                    if (expense["id"] == expenseId) {
+                        val mutableExpense = expense.toMutableMap()
+                        mutableExpense["receiptPhotoUrl"] = uploadedUrls["receipt"] ?: ""
+                        mutableExpense
+                    } else {
+                        expense
+                    }
                 }
+                
+                db.collection(Constants.COLLECTION_TRIPS).document(tripId)
+                    .update("expenses", updatedExpenses).await()
             } else {
-                updates["startPhotos"] = uploadedUrls
-                if (updateStatus) {
-                    updates["status"] = "IN_PROGRESS"
+                // Update trip photos (start or completion)
+                val updates = mutableMapOf<String, Any>()
+                
+                if (photoType == "completion") {
+                    updates["completionPhotos"] = uploadedUrls
+                    if (updateStatus) {
+                        updates["status"] = "AWAITING_VERIFICATION"
+                    }
+                } else {
+                    updates["startPhotos"] = uploadedUrls
+                    if (updateStatus) {
+                        updates["status"] = "IN_PROGRESS"
+                    }
                 }
+
+                db.collection(Constants.COLLECTION_TRIPS).document(tripId).update(updates).await()
             }
 
-            db.collection(Constants.COLLECTION_TRIPS).document(tripId).update(updates).await()
+            // Set output data for MediaManagerScreen to display
+            val outputData = workDataOf(
+                "photoType" to photoType,
+                "tripId" to tripId
+            )
 
-            return Result.success()
+            return Result.success(outputData)
 
         } catch (e: Exception) {
             e.printStackTrace()

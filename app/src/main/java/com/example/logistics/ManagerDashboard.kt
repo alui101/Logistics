@@ -2,7 +2,6 @@
 
 package com.example.logistics
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,6 +13,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -306,7 +307,10 @@ fun TripManagementScreen(
                                 onDelete = { viewModel.deleteTrip(trip) },
                                 onVerify = if (trip.status == "AWAITING_VERIFICATION") {
                                     { navController.navigate("${Constants.ROUTE_TRIP_VERIFICATION}/${trip.id}") }
-                                } else null
+                                } else null,
+                                onViewPhotos = {
+                                    // Will be handled in the card
+                                }
                             )
                         }
                     }
@@ -321,9 +325,13 @@ fun TripManagementCard(
     trip: Trip, 
     onEdit: () -> Unit, 
     onDelete: () -> Unit,
-    onVerify: (() -> Unit)? = null
+    onVerify: (() -> Unit)? = null,
+    onViewPhotos: () -> Unit = {}
 ) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showPhotosDialog by remember { mutableStateOf(false) }
+    var selectedPhotoUrl by remember { mutableStateOf<String?>(null) }
+    var selectedPhotoLabel by remember { mutableStateOf<String?>(null) }
 
     if (showDeleteConfirm) {
         AlertDialog(
@@ -391,6 +399,20 @@ fun TripManagementCard(
                             fontWeight = FontWeight.Bold
                         )
                     }
+                    
+                    // Show photo counts
+                    val hasPhotos = trip.startPhotos.isNotEmpty() || trip.completionPhotos.isNotEmpty() || trip.expenses.any { it.receiptPhotoUrl != null }
+                    if (hasPhotos) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        TextButton(
+                            onClick = { showPhotosDialog = true },
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("View Photos", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
 
                 Column {
@@ -415,4 +437,174 @@ fun TripManagementCard(
             }
         }
     }
+    
+    // Photos Dialog
+    if (showPhotosDialog) {
+        TripPhotosDialog(
+            trip = trip,
+            onDismiss = { showPhotosDialog = false },
+            onPhotoClick = { label, url ->
+                selectedPhotoLabel = label
+                selectedPhotoUrl = url
+            }
+        )
+    }
+    
+    // Individual Photo Dialog
+    if (selectedPhotoUrl != null && selectedPhotoLabel != null) {
+        PhotoDialog(
+            photoUrl = selectedPhotoUrl!!,
+            label = selectedPhotoLabel!!,
+            onDismiss = {
+                selectedPhotoUrl = null
+                selectedPhotoLabel = null
+            }
+        )
+    }
+}
+
+@Composable
+fun TripPhotosDialog(
+    trip: Trip,
+    onDismiss: () -> Unit,
+    onPhotoClick: (String, String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Trip Photos") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Start Photos
+                if (trip.startPhotos.isNotEmpty()) {
+                    Text("Start Photos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    val photoLabels = listOf("Odometer", "Front", "Back", "Left Side", "Right Side")
+                    photoLabels.forEach { label ->
+                        val photoUrl = trip.startPhotos[label]
+                        if (photoUrl != null) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPhotoClick(label, photoUrl) },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                                    TextButton(onClick = { onPhotoClick(label, photoUrl) }) {
+                                        Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("View")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Completion Photos
+                if (trip.completionPhotos.isNotEmpty()) {
+                    if (trip.startPhotos.isNotEmpty()) {
+                        HorizontalDivider()
+                    }
+                    Text("Completion Photos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    val photoLabels = listOf("Odometer", "Front", "Back", "Left Side", "Right Side")
+                    photoLabels.forEach { label ->
+                        val photoUrl = trip.completionPhotos[label]
+                        if (photoUrl != null) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPhotoClick(label, photoUrl) },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                                    TextButton(onClick = { onPhotoClick(label, photoUrl) }) {
+                                        Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("View")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Expense Receipts
+                val expensesWithReceipts = trip.expenses.filter { it.receiptPhotoUrl != null }
+                if (expensesWithReceipts.isNotEmpty()) {
+                    if (trip.startPhotos.isNotEmpty() || trip.completionPhotos.isNotEmpty()) {
+                        HorizontalDivider()
+                    }
+                    Text("Expense Receipts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    expensesWithReceipts.forEach { expense ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onPhotoClick(
+                                        "${expense.type.replaceFirstChar { it.uppercase() }} Receipt",
+                                        expense.receiptPhotoUrl!!
+                                    )
+                                },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "${expense.type.replaceFirstChar { it.uppercase() }} - $${String.format("%.2f", expense.amount)}",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    if (expense.description.isNotEmpty()) {
+                                        Text(
+                                            expense.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
+                                }
+                                TextButton(
+                                    onClick = {
+                                        onPhotoClick(
+                                            "${expense.type.replaceFirstChar { it.uppercase() }} Receipt",
+                                            expense.receiptPhotoUrl!!
+                                        )
+                                    }
+                                ) {
+                                    Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("View Receipt")
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (trip.startPhotos.isEmpty() && trip.completionPhotos.isEmpty() && expensesWithReceipts.isEmpty()) {
+                    Text("No photos available", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }

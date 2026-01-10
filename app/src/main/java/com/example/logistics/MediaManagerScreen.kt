@@ -69,6 +69,19 @@ fun MediaManagerScreen(navController: NavController) {
 @Composable
 fun UploadStatusCard(workInfo: WorkInfo) {
     val state = workInfo.state
+    val progressData = workInfo.progress
+    val outputData = workInfo.outputData
+    
+    // Determine upload type from progress (for in-progress) or output data (for completed)
+    val photoType = progressData.getString("photoType") ?: outputData.getString("photoType") ?: "unknown"
+    val tripId = progressData.getString("tripId") ?: outputData.getString("tripId") ?: "unknown"
+    
+    val uploadTypeLabel = when (photoType) {
+        "start" -> "Start Photos"
+        "completion" -> "Completion Photos"
+        "expense_receipt" -> "Expense Receipt"
+        else -> "Upload Task"
+    }
 
     val color = when (state) {
         WorkInfo.State.SUCCEEDED -> Color(0xFF4CAF50) // Green
@@ -92,7 +105,8 @@ fun UploadStatusCard(workInfo: WorkInfo) {
             Icon(icon, contentDescription = null, tint = color)
             Spacer(modifier = Modifier.width(16.dp))
             Column {
-                Text("Upload Task", style = MaterialTheme.typography.titleMedium)
+                Text(uploadTypeLabel, style = MaterialTheme.typography.titleMedium)
+                Text("Trip: ${tripId.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                 Text("Status: $state", style = MaterialTheme.typography.bodyMedium, color = color)
             }
         }

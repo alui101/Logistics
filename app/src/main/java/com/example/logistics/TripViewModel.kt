@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.io.File
+import java.io.FileOutputStream
 
 data class TripState(
     val isLoading: Boolean = false,
@@ -182,7 +183,15 @@ class TripViewModel : ViewModel() {
             .addOnSuccessListener { document ->
                 val trip = document.toObject(Trip::class.java)
                 if (trip != null) {
-                    _uiState.value = _uiState.value.copy(isLoading = false, trips = listOf(trip))
+                    // Merge with existing trips list instead of replacing
+                    val currentTrips = _uiState.value.trips.toMutableList()
+                    val existingIndex = currentTrips.indexOfFirst { it.id == tripId }
+                    if (existingIndex >= 0) {
+                        currentTrips[existingIndex] = trip
+                    } else {
+                        currentTrips.add(trip)
+                    }
+                    _uiState.value = _uiState.value.copy(isLoading = false, trips = currentTrips)
                 } else {
                     _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Trip document not found")
                 }
@@ -305,44 +314,34 @@ class TripViewModel : ViewModel() {
         
         viewModelScope.launch {
             try {
-                var photoUrl: String? = null
-                
-                // Upload receipt photo if provided
-                if (receiptPhotoUri != null) {
-                    val storageRef = com.google.firebase.storage.FirebaseStorage.getInstance().reference
-                    // Read from FileProvider URI using ContentResolver
-                    val inputStream = context.contentResolver.openInputStream(receiptPhotoUri)
-                    if (inputStream != null) {
-                        val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
-                        inputStream.close()
-                        
-                        if (bitmap != null) {
-                            val outputStream = java.io.ByteArrayOutputStream()
-                            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 20, outputStream)
-                            val compressedData = outputStream.toByteArray()
-                            
-                            val expenseId = db.collection(Constants.COLLECTION_TRIPS)
-                                .document(tripId)
-                                .collection("expenses")
-                                .document()
-                                .id
-                            val photoRef = storageRef.child("trips/$tripId/expenses/${expenseId}_receipt.jpg")
-                            photoRef.putBytes(compressedData).await()
-                            photoUrl = photoRef.downloadUrl.await().toString()
-                        }
-                    }
-                }
-
-                // Get current trip to update expenses list
+                // Get current trip data to validate food limit with fresh data
                 val tripDoc = db.collection(Constants.COLLECTION_TRIPS).document(tripId).get().await()
                 val currentExpenses = tripDoc.get("expenses") as? List<Map<String, Any>> ?: emptyList()
+                val foodLimit = tripDoc.getDouble("foodLimit") ?: 0.0
                 
+                // Validate food expense limit with fresh data
+                if (expenseType == "food" && foodLimit > 0) {
+                    val currentFoodExpenses = currentExpenses
+                        .filter { it["type"] == "food" }
+                        .sumOf { (it["amount"] as? Number)?.toDouble() ?: 0.0 }
+                    
+                    if (currentFoodExpenses + amount > foodLimit) {
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false, 
+                            errorMessage = "Food expense would exceed the limit of $${String.format("%.2f", foodLimit)}. Current food expenses: $${String.format("%.2f", currentFoodExpenses)}"
+                        )
+                        return@launch
+                    }
+                }
+                
+                // Generate expense ID first
                 val expenseId = db.collection(Constants.COLLECTION_TRIPS)
                     .document(tripId)
                     .collection("expenses")
                     .document()
                     .id
                 
+                // Create expense without photo URL initially
                 val newExpenseMap = mutableMapOf<String, Any>(
                     "id" to expenseId,
                     "type" to expenseType,
@@ -351,18 +350,95 @@ class TripViewModel : ViewModel() {
                     "createdAt" to com.google.firebase.Timestamp.now()
                 )
                 
-                if (photoUrl != null) {
-                    newExpenseMap["receiptPhotoUrl"] = photoUrl
-                }
-                
-                // Update trip's expenses list
+                // Save expense immediately (without photo URL)
                 db.collection(Constants.COLLECTION_TRIPS).document(tripId)
                     .update("expenses", currentExpenses + newExpenseMap).await()
 
-                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Expense added successfully")
+                // If receipt photo provided, queue it as background task
+                if (receiptPhotoUri != null) {
+                    // Copy the photo to cache with a predictable name for the worker
+                    val fileName = "expense_receipt_${expenseId}.jpg"
+                    val cacheFile = File(context.cacheDir, fileName)
+                    
+                    // Delete old file if exists
+                    if (cacheFile.exists()) {
+                        cacheFile.delete()
+                    }
+                    
+                    // Copy the URI content to cache file
+                    val inputStream = context.contentResolver.openInputStream(receiptPhotoUri)
+                    if (inputStream != null) {
+                        try {
+                            FileOutputStream(cacheFile).use { output ->
+                                inputStream.copyTo(output)
+                            }
+                        } finally {
+                            inputStream.close()
+                        }
+                    }
+                    
+                    // Queue background upload
+                    val workData = workDataOf(
+                        "tripId" to tripId,
+                        "expenseId" to expenseId,
+                        "filePaths" to arrayOf(cacheFile.absolutePath),
+                        "labels" to arrayOf("receipt"),
+                        "photoType" to "expense_receipt"
+                    )
+                    
+                    val constraints = Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build()
+                    
+                    val uploadWork = OneTimeWorkRequestBuilder<UploadWorker>()
+                        .setInputData(workData)
+                        .setConstraints(constraints)
+                        .addTag("trip_upload")
+                        .build()
+                    
+                    WorkManager.getInstance(context).enqueue(uploadWork)
+                }
+
+                // Reload the trip to update UI immediately
+                loadSingleTrip(tripId)
+                
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false, 
+                    successMessage = if (receiptPhotoUri != null) 
+                        "Expense added successfully. Receipt uploading in background." 
+                    else 
+                        "Expense added successfully"
+                )
                 onSuccess()
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to add expense: ${e.localizedMessage}")
+            }
+        }
+    }
+    
+    // Delete expense from trip
+    fun deleteExpense(tripId: String, expenseId: String) {
+        _uiState.value = _uiState.value.copy(isLoading = true)
+        
+        viewModelScope.launch {
+            try {
+                // Get current trip to update expenses list
+                val tripDoc = db.collection(Constants.COLLECTION_TRIPS).document(tripId).get().await()
+                val currentExpenses = tripDoc.get("expenses") as? List<Map<String, Any>> ?: emptyList()
+                
+                // Remove the expense with matching id
+                val updatedExpenses = currentExpenses.filterNot { it["id"] == expenseId }
+                
+                // Update trip's expenses list
+                db.collection(Constants.COLLECTION_TRIPS).document(tripId)
+                    .update("expenses", updatedExpenses).await()
+
+                // Reload the trip to update UI immediately
+                loadSingleTrip(tripId)
+                
+                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Expense deleted successfully")
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to delete expense: ${e.localizedMessage}")
             }
         }
     }

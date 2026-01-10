@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,6 +54,18 @@ fun DriverTripDetailScreen(
 
     // Find the specific trip from the list
     val trip = state.trips.find { it.id == tripId }
+
+    // Show error and success messages
+    LaunchedEffect(state.errorMessage, state.successMessage) {
+        state.errorMessage?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            viewModel.clearMessages()
+        }
+        state.successMessage?.let {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            viewModel.clearMessages()
+        }
+    }
 
     // State for the 5 required photos (start or completion)
     val requiredPhotos = listOf("Odometer", "Front", "Back", "Left Side", "Right Side")
@@ -261,7 +274,12 @@ fun DriverTripDetailScreen(
                 
                 if (trip.expenses.isNotEmpty()) {
                     trip.expenses.forEach { expense ->
-                        ExpenseCard(expense = expense)
+                        ExpenseCard(
+                            expense = expense,
+                            onDelete = {
+                                viewModel.deleteExpense(trip.id, expense.id)
+                            }
+                        )
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                     
@@ -393,16 +411,6 @@ fun DriverTripDetailScreen(
                             return@ExpenseDialog
                         }
                         
-                        // Check food limit
-                        if (selectedExpenseType == "food") {
-                            val currentFoodExpenses = trip.expenses.filter { it.type == "food" }.sumOf { it.amount }
-                            val newAmount = expenseAmount.toDouble()
-                            if (trip.foodLimit > 0 && currentFoodExpenses + newAmount > trip.foodLimit) {
-                                Toast.makeText(context, "Food expense exceeds the limit of $${String.format("%.2f", trip.foodLimit)}", Toast.LENGTH_LONG).show()
-                                return@ExpenseDialog
-                            }
-                        }
-                        
                         viewModel.addExpense(
                             context = context,
                             tripId = trip.id,
@@ -468,7 +476,10 @@ fun PhotoSlot(label: String, currentUri: Uri?, onTakeClick: () -> Unit) {
 }
 
 @Composable
-fun ExpenseCard(expense: Expense) {
+fun ExpenseCard(
+    expense: Expense,
+    onDelete: () -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -498,11 +509,26 @@ fun ExpenseCard(expense: Expense) {
                     )
                 }
             }
-            Text(
-                text = "$${String.format("%.2f", expense.amount)}",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "$${String.format("%.2f", expense.amount)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "Delete expense",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
         }
     }
 }

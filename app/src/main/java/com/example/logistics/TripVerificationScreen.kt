@@ -3,6 +3,7 @@
 package com.example.logistics
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -10,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,7 +22,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
-import coil.compose.rememberAsyncImagePainter
+import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
+import coil.request.ImageRequest
+import coil.request.CachePolicy
+import coil.size.Size
+import coil.size.Scale
+import androidx.compose.ui.platform.LocalContext
+import coil.ImageLoader
 
 @Composable
 fun TripVerificationScreen(
@@ -31,6 +41,9 @@ fun TripVerificationScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
+    val context = LocalContext.current
+    val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
+    
     LaunchedEffect(tripId) {
         val cachedTrip = state.trips.find { it.id == tripId }
         if (cachedTrip == null) {
@@ -39,7 +52,50 @@ fun TripVerificationScreen(
     }
 
     val trip = state.trips.find { it.id == tripId }
+    
+    // Preload images when trip data is available
+    LaunchedEffect(trip?.id) {
+        trip?.let { currentTrip ->
+            // Preload start photos
+            currentTrip.startPhotos.values.forEach { url ->
+                imageLoader.enqueue(
+                    ImageRequest.Builder(context)
+                        .data(url)
+                        .size(Size(800, 600))
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build()
+                )
+            }
+            // Preload completion photos
+            currentTrip.completionPhotos.values.forEach { url ->
+                imageLoader.enqueue(
+                    ImageRequest.Builder(context)
+                        .data(url)
+                        .size(Size(800, 600))
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build()
+                )
+            }
+            // Preload expense receipt photos
+            currentTrip.expenses.forEach { expense ->
+                expense.receiptPhotoUrl?.let { url ->
+                    imageLoader.enqueue(
+                        ImageRequest.Builder(context)
+                            .data(url)
+                            .size(Size(800, 600))
+                            .memoryCachePolicy(CachePolicy.ENABLED)
+                            .diskCachePolicy(CachePolicy.ENABLED)
+                            .build()
+                    )
+                }
+            }
+        }
+    }
     var finalMileage by remember { mutableStateOf("") }
+    var selectedPhotoUrl by remember { mutableStateOf<String?>(null) }
+    var selectedPhotoLabel by remember { mutableStateOf<String?>(null) }
 
     if (trip == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -111,6 +167,22 @@ fun TripVerificationScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
+            // Start Photos Section
+            if (trip.startPhotos.isNotEmpty()) {
+                Text("Start Photos", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                PhotoGrid(
+                    photos = trip.startPhotos,
+                    onPhotoClick = { label, url ->
+                        selectedPhotoLabel = label
+                        selectedPhotoUrl = url
+                    }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
             // Completion Photos
             Text("Completion Photos", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(8.dp))
@@ -118,34 +190,63 @@ fun TripVerificationScreen(
             if (trip.completionPhotos.isEmpty()) {
                 Text("No completion photos available", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
             } else {
-                val photoLabels = listOf("Odometer", "Front", "Back", "Left Side", "Right Side")
-                photoLabels.forEach { label ->
-                    val photoUrl = trip.completionPhotos[label]
-                    if (photoUrl != null) {
+                PhotoGrid(
+                    photos = trip.completionPhotos,
+                    onPhotoClick = { label, url ->
+                        selectedPhotoLabel = label
+                        selectedPhotoUrl = url
+                    }
+                )
+            }
+
+            // Expense Receipts Section
+            if (trip.expenses.isNotEmpty() && trip.expenses.any { it.receiptPhotoUrl != null }) {
+                Spacer(modifier = Modifier.height(24.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Expense Receipts", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                trip.expenses.forEach { expense ->
+                    if (expense.receiptPhotoUrl != null) {
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp),
+                                .padding(vertical = 4.dp)
+                                .clickable {
+                                    selectedPhotoLabel = "${expense.type.replaceFirstChar { it.uppercase() }} Receipt"
+                                    selectedPhotoUrl = expense.receiptPhotoUrl
+                                },
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                         ) {
-                            Column(modifier = Modifier.padding(8.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${expense.type.replaceFirstChar { it.uppercase() }} - $${String.format("%.2f", expense.amount)}",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (expense.description.isNotEmpty()) {
+                                        Text(
+                                            text = expense.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
                                 }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Image(
-                                    painter = rememberAsyncImagePainter(photoUrl),
-                                    contentDescription = label,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(200.dp),
-                                    contentScale = ContentScale.Fit
-                                )
+                                TextButton(
+                                    onClick = {
+                                        selectedPhotoLabel = "${expense.type.replaceFirstChar { it.uppercase() }} Receipt"
+                                        selectedPhotoUrl = expense.receiptPhotoUrl
+                                    }
+                                ) {
+                                    Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("View Receipt")
+                                }
                             }
                         }
                     }
@@ -221,4 +322,168 @@ fun TripVerificationScreen(
             }
         }
     }
+
+    // Photo Dialog
+    if (selectedPhotoUrl != null && selectedPhotoLabel != null) {
+        PhotoDialog(
+            photoUrl = selectedPhotoUrl!!,
+            label = selectedPhotoLabel!!,
+            onDismiss = {
+                selectedPhotoUrl = null
+                selectedPhotoLabel = null
+            }
+        )
+    }
+}
+
+@Composable
+fun PhotoGrid(
+    photos: Map<String, String>,
+    onPhotoClick: (String, String) -> Unit
+) {
+    val context = LocalContext.current
+    val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
+    
+    val photoLabels = listOf("Odometer", "Front", "Back", "Left Side", "Right Side")
+    photoLabels.forEach { label ->
+        val photoUrl = photos[label]
+        if (photoUrl != null) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clickable { onPhotoClick(label, photoUrl) },
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(modifier = Modifier.padding(8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(onClick = { onPhotoClick(label, photoUrl) }) {
+                            Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("View")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SubcomposeAsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(photoUrl)
+                            .size(Size(800, 600)) // Resize for thumbnails - smaller = faster
+                            .scale(Scale.FIT)
+                            .memoryCachePolicy(CachePolicy.ENABLED)
+                            .diskCachePolicy(CachePolicy.ENABLED)
+                            .networkCachePolicy(CachePolicy.ENABLED)
+                            .build(),
+                        imageLoader = imageLoader,
+                        contentDescription = label,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentScale = ContentScale.Fit,
+                        loading = {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        },
+                        error = {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Failed to load image",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PhotoDialog(
+    photoUrl: String,
+    label: String,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(label) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                SubcomposeAsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(photoUrl)
+                        .size(Size(1200, 1200)) // Higher resolution for full view
+                        .scale(Scale.FIT)
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .networkCachePolicy(CachePolicy.ENABLED)
+                        .build(),
+                    imageLoader = imageLoader,
+                    contentDescription = label,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 600.dp),
+                    contentScale = ContentScale.Fit,
+                    loading = {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(32.dp)
+                        ) {
+                            CircularProgressIndicator()
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "Loading image...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                    },
+                    error = {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(32.dp)
+                        ) {
+                            Text(
+                                "Failed to load image",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
