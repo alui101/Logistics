@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "293415971821",
+    "project_id": "sirat-96f64",
+    "storage_bucket": "sirat-96f64.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:293415971821:android:4930c5d1952f70eb7e55e4",
+        "android_client_info": {
+          "package_name": "com.example.logistics"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDxeP-LmQO0nhpnbe3dJtqSjpl0_rWQmkQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
