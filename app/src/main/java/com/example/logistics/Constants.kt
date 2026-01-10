@@ -23,4 +23,5 @@ object Constants {
     const val ROUTE_MANAGE_VEHICLES = "manageVehicles"
     const val ROUTE_DRIVER_MENU = "driver_menu"
     const val ROUTE_MEDIA_MANAGER = "media_manager"
+    const val ROUTE_TRIP_VERIFICATION = "trip_verification"
 }

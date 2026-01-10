@@ -15,6 +15,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
@@ -50,13 +54,24 @@ fun DriverTripDetailScreen(
     // Find the specific trip from the list
     val trip = state.trips.find { it.id == tripId }
 
-    // State for the 5 required photos
+    // State for the 5 required photos (start or completion)
     val requiredPhotos = listOf("Odometer", "Front", "Back", "Left Side", "Right Side")
     val takenPhotos = remember { mutableStateMapOf<String, Uri>() }
+    val completionPhotos = remember { mutableStateMapOf<String, Uri>() }
+
+    // Expense entry state
+    var showExpenseDialog by remember { mutableStateOf(false) }
+    var selectedExpenseType by remember { mutableStateOf("fuel") }
+    var expenseAmount by remember { mutableStateOf("") }
+    var expenseDescription by remember { mutableStateOf("") }
+    var expenseReceiptUri by remember { mutableStateOf<Uri?>(null) }
+    val expenseTypes = listOf("fuel", "visas", "tips", "hotel", "food", "repairs")
+    val expenseTypesRequiringPhoto = listOf("fuel", "visas", "repairs")
 
     // Temp variables for camera logic
     var currentPhotoLabel by remember { mutableStateOf("") }
     var tempPhotoUri by remember { mutableStateOf<Uri?>(null) }
+    var isTakingExpenseReceipt by remember { mutableStateOf(false) }
 
     // --- HELPER: Create a URI that points to a specific file in Cache ---
     // This naming convention allows the Background Worker to find the file later.
@@ -75,14 +90,30 @@ fun DriverTripDetailScreen(
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success && tempPhotoUri != null && currentPhotoLabel.isNotEmpty()) {
-            takenPhotos[currentPhotoLabel] = tempPhotoUri!!
+        if (success && tempPhotoUri != null) {
+            if (isTakingExpenseReceipt) {
+                expenseReceiptUri = tempPhotoUri
+                isTakingExpenseReceipt = false
+            } else if (currentPhotoLabel.isNotEmpty()) {
+                if (trip?.status == "PENDING") {
+                    takenPhotos[currentPhotoLabel] = tempPhotoUri!!
+                } else if (trip?.status == "IN_PROGRESS") {
+                    completionPhotos[currentPhotoLabel] = tempPhotoUri!!
+                }
+            }
         }
     }
 
     fun launchCamera(label: String) {
         currentPhotoLabel = label
         val uri = createTempPictureUri(label)
+        tempPhotoUri = uri
+        cameraLauncher.launch(uri)
+    }
+
+    fun launchExpenseReceiptCamera() {
+        isTakingExpenseReceipt = true
+        val uri = createTempPictureUri("expense_receipt_${System.currentTimeMillis()}")
         tempPhotoUri = uri
         cameraLauncher.launch(uri)
     }
@@ -186,25 +217,209 @@ fun DriverTripDetailScreen(
                     }
                 }
 
-            } else {
-                // Trip is already started
-                Text("Status: ${trip.status}", style = MaterialTheme.typography.titleLarge)
+            } else if (trip.status == "IN_PROGRESS") {
+                // Trip is in progress - show expenses and completion
+                Text("Status: IN PROGRESS", style = MaterialTheme.typography.titleLarge)
                 Spacer(modifier = Modifier.height(8.dp))
-
-                if (trip.status == "IN_PROGRESS") {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "You are currently in transit. Drive safely!",
-                            modifier = Modifier.padding(16.dp),
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
-                } else if (trip.status == "COMPLETED") {
-                    Text("This trip has been completed.", color = MaterialTheme.colorScheme.secondary)
+                
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "You are currently in transit. Drive safely!",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Expenses Section
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Expenses", style = MaterialTheme.typography.titleMedium)
+                    Button(
+                        onClick = { showExpenseDialog = true },
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add Expense")
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // Display existing expenses
+                val totalExpenses = trip.expenses.sumOf { it.amount }
+                val foodExpenses = trip.expenses.filter { it.type == "food" }.sumOf { it.amount }
+                val foodLimit = trip.foodLimit
+                
+                if (trip.expenses.isNotEmpty()) {
+                    trip.expenses.forEach { expense ->
+                        ExpenseCard(expense = expense)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Total Expenses:", style = MaterialTheme.typography.titleMedium)
+                        Text("$${String.format("%.2f", totalExpenses)}", style = MaterialTheme.typography.titleMedium)
+                    }
+                    
+                    if (foodLimit > 0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Food Expenses:", style = MaterialTheme.typography.bodyMedium)
+                            Text("$${String.format("%.2f", foodExpenses)} / $${String.format("%.2f", foodLimit)}", 
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (foodExpenses > foodLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                } else {
+                    Text("No expenses added yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
+                }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Complete Trip Section
+                Text("Complete Trip", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Take all 5 photos to complete the trip. These will be sent to admin/manager for verification.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                requiredPhotos.forEach { label ->
+                    PhotoSlot(
+                        label = label,
+                        currentUri = completionPhotos[label],
+                        onTakeClick = { 
+                            currentPhotoLabel = label
+                            val uri = createTempPictureUri("completion_${label}_${tripId}")
+                            tempPhotoUri = uri
+                            cameraLauncher.launch(uri)
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Button(
+                    onClick = {
+                        if (completionPhotos.size == requiredPhotos.size) {
+                            viewModel.uploadCompletionPhotosAndStopTrip(
+                                context = context,
+                                tripId = trip.id,
+                                photoUris = completionPhotos,
+                                onSuccess = {
+                                    Toast.makeText(context, "Trip completion submitted! Awaiting verification...", Toast.LENGTH_LONG).show()
+                                    onNavigateBack()
+                                }
+                            )
+                        } else {
+                            Toast.makeText(context, "Please take all 5 photos first.", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.isLoading && completionPhotos.size == requiredPhotos.size
+                ) {
+                    if (state.isLoading) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    } else {
+                        Text("Complete Trip (Background Upload)")
+                    }
+                }
+                
+            } else if (trip.status == "AWAITING_VERIFICATION") {
+                Text("Status: AWAITING VERIFICATION", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Your trip completion photos have been submitted and are awaiting admin/manager verification.", 
+                    style = MaterialTheme.typography.bodyMedium)
+            } else if (trip.status == "COMPLETED") {
+                Text("Status: COMPLETED", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.secondary)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("This trip has been completed and verified.", style = MaterialTheme.typography.bodyMedium)
+                
+                if (trip.finalMileage != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Final Mileage: ${trip.finalMileage}", style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+            
+            // Expense Dialog
+            if (showExpenseDialog) {
+                ExpenseDialog(
+                    expenseType = selectedExpenseType,
+                    onExpenseTypeChange = { selectedExpenseType = it },
+                    expenseTypes = expenseTypes,
+                    expenseAmount = expenseAmount,
+                    onExpenseAmountChange = { expenseAmount = it },
+                    expenseDescription = expenseDescription,
+                    onExpenseDescriptionChange = { expenseDescription = it },
+                    receiptUri = expenseReceiptUri,
+                    requiresPhoto = expenseTypesRequiringPhoto.contains(selectedExpenseType),
+                    onTakeReceiptPhoto = { launchExpenseReceiptCamera() },
+                    onDismiss = { 
+                        showExpenseDialog = false
+                        expenseAmount = ""
+                        expenseDescription = ""
+                        expenseReceiptUri = null
+                    },
+                    onConfirm = {
+                        if (expenseAmount.isBlank() || expenseAmount.toDoubleOrNull() == null) {
+                            Toast.makeText(context, "Please enter a valid amount", Toast.LENGTH_SHORT).show()
+                            return@ExpenseDialog
+                        }
+                        
+                        if (expenseTypesRequiringPhoto.contains(selectedExpenseType) && expenseReceiptUri == null) {
+                            Toast.makeText(context, "Please take a photo of the receipt", Toast.LENGTH_SHORT).show()
+                            return@ExpenseDialog
+                        }
+                        
+                        // Check food limit
+                        if (selectedExpenseType == "food") {
+                            val currentFoodExpenses = trip.expenses.filter { it.type == "food" }.sumOf { it.amount }
+                            val newAmount = expenseAmount.toDouble()
+                            if (trip.foodLimit > 0 && currentFoodExpenses + newAmount > trip.foodLimit) {
+                                Toast.makeText(context, "Food expense exceeds the limit of $${String.format("%.2f", trip.foodLimit)}", Toast.LENGTH_LONG).show()
+                                return@ExpenseDialog
+                            }
+                        }
+                        
+                        viewModel.addExpense(
+                            context = context,
+                            tripId = trip.id,
+                            expenseType = selectedExpenseType,
+                            amount = expenseAmount.toDouble(),
+                            description = expenseDescription,
+                            receiptPhotoUri = expenseReceiptUri,
+                            onSuccess = {
+                                showExpenseDialog = false
+                                expenseAmount = ""
+                                expenseDescription = ""
+                                expenseReceiptUri = null
+                            }
+                        )
+                    },
+                    isLoading = state.isLoading
+                )
             }
         }
     }
@@ -250,4 +465,179 @@ fun PhotoSlot(label: String, currentUri: Uri?, onTakeClick: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+fun ExpenseCard(expense: Expense) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = expense.type.replaceFirstChar { it.uppercase() },
+                    style = MaterialTheme.typography.titleMedium
+                )
+                if (expense.description.isNotEmpty()) {
+                    Text(
+                        text = expense.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                if (expense.receiptPhotoUrl != null) {
+                    Text(
+                        text = "✓ Receipt attached",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Text(
+                text = "$${String.format("%.2f", expense.amount)}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun ExpenseDialog(
+    expenseType: String,
+    onExpenseTypeChange: (String) -> Unit,
+    expenseTypes: List<String>,
+    expenseAmount: String,
+    onExpenseAmountChange: (String) -> Unit,
+    expenseDescription: String,
+    onExpenseDescriptionChange: (String) -> Unit,
+    receiptUri: Uri?,
+    requiresPhoto: Boolean,
+    onTakeReceiptPhoto: () -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    isLoading: Boolean
+) {
+    var expenseTypeExpanded by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Expense") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Expense Type
+                ExposedDropdownMenuBox(
+                    expanded = expenseTypeExpanded,
+                    onExpandedChange = { expenseTypeExpanded = !expenseTypeExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = expenseType.replaceFirstChar { it.uppercase() },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Expense Type") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expenseTypeExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expenseTypeExpanded,
+                        onDismissRequest = { expenseTypeExpanded = false }
+                    ) {
+                        expenseTypes.forEach { type ->
+                            DropdownMenuItem(
+                                text = { Text(type.replaceFirstChar { it.uppercase() }) },
+                                onClick = {
+                                    onExpenseTypeChange(type)
+                                    expenseTypeExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Amount
+                OutlinedTextField(
+                    value = expenseAmount,
+                    onValueChange = onExpenseAmountChange,
+                    label = { Text("Amount") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    leadingIcon = { Icon(Icons.Filled.AttachMoney, contentDescription = null) }
+                )
+
+                // Description
+                OutlinedTextField(
+                    value = expenseDescription,
+                    onValueChange = onExpenseDescriptionChange,
+                    label = { Text("Description (Optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 3
+                )
+
+                // Receipt Photo (if required)
+                if (requiresPhoto) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onTakeReceiptPhoto() },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (receiptUri != null) {
+                                Icon(Icons.Filled.CheckCircle, contentDescription = "Done", tint = Color(0xFF4CAF50))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Card(modifier = Modifier.size(40.dp)) {
+                                    Image(
+                                        painter = rememberAsyncImagePainter(receiptUri),
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Receipt photo taken", style = MaterialTheme.typography.bodyMedium)
+                            } else {
+                                Icon(Icons.Filled.CameraAlt, contentDescription = "Take Photo")
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Take Receipt Photo (Required)", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = !isLoading && expenseAmount.isNotBlank() && (!requiresPhoto || receiptUri != null)
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else {
+                    Text("Add")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
@@ -45,6 +46,7 @@ fun TripManagementScreen(
     var selectedDriver by remember { mutableStateOf<UserItem?>(null) }
     var selectedVehicle by remember { mutableStateOf<Vehicle?>(null) }
     var selectedLoadType by remember { mutableStateOf("Dry Van") }
+    var foodLimit by remember { mutableStateOf("") }
 
     // UI Visibility State
     var driverExpanded by remember { mutableStateOf(false) }
@@ -62,6 +64,7 @@ fun TripManagementScreen(
     fun resetForm() {
         origin = ""; destination = ""; description = ""
         selectedDriver = null; selectedVehicle = null; selectedLoadType = "Dry Van"
+        foodLimit = ""
         isEditMode = false; editingTripId = ""
     }
 
@@ -73,6 +76,7 @@ fun TripManagementScreen(
         destination = trip.destination
         description = trip.description
         selectedLoadType = trip.loadType
+        foodLimit = if (trip.foodLimit > 0) trip.foodLimit.toString() else ""
         selectedDriver = state.drivers.find { it.uid == trip.driverId }
         selectedVehicle = state.vehicles.find { it.id == trip.vehicleId }
         showForm = true
@@ -205,6 +209,18 @@ fun TripManagementScreen(
                     OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text("Description") }, modifier = Modifier.fillMaxWidth())
                     Spacer(modifier = Modifier.height(8.dp))
 
+                    // Food Limit
+                    OutlinedTextField(
+                        value = foodLimit,
+                        onValueChange = { foodLimit = it },
+                        label = { Text("Food Expense Limit (Optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                        leadingIcon = { Icon(Icons.Filled.AttachMoney, contentDescription = null) },
+                        placeholder = { Text("e.g., 100.00") }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     // Driver
                     ExposedDropdownMenuBox(
                         expanded = driverExpanded,
@@ -246,10 +262,11 @@ fun TripManagementScreen(
 
                     Button(
                         onClick = {
+                            val foodLimitValue = foodLimit.toDoubleOrNull() ?: 0.0
                             if (isEditMode) {
-                                viewModel.updateTrip(editingTripId, origin, destination, description, selectedLoadType, selectedDriver, selectedVehicle)
+                                viewModel.updateTrip(editingTripId, origin, destination, description, selectedLoadType, foodLimitValue, selectedDriver, selectedVehicle)
                             } else {
-                                viewModel.createTrip(origin, destination, description, selectedLoadType, selectedDriver, selectedVehicle)
+                                viewModel.createTrip(origin, destination, description, selectedLoadType, foodLimitValue, selectedDriver, selectedVehicle)
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -286,7 +303,10 @@ fun TripManagementScreen(
                             TripManagementCard(
                                 trip = trip,
                                 onEdit = { onEditClick(trip) },
-                                onDelete = { viewModel.deleteTrip(trip) }
+                                onDelete = { viewModel.deleteTrip(trip) },
+                                onVerify = if (trip.status == "AWAITING_VERIFICATION") {
+                                    { navController.navigate("${Constants.ROUTE_TRIP_VERIFICATION}/${trip.id}") }
+                                } else null
                             )
                         }
                     }
@@ -297,7 +317,12 @@ fun TripManagementScreen(
 }
 
 @Composable
-fun TripManagementCard(trip: Trip, onEdit: () -> Unit, onDelete: () -> Unit) {
+fun TripManagementCard(
+    trip: Trip, 
+    onEdit: () -> Unit, 
+    onDelete: () -> Unit,
+    onVerify: (() -> Unit)? = null
+) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     if (showDeleteConfirm) {
@@ -321,7 +346,15 @@ fun TripManagementCard(trip: Trip, onEdit: () -> Unit, onDelete: () -> Unit) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Trip #${trip.id.take(4).uppercase()}", style = MaterialTheme.typography.labelMedium)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Badge(containerColor = if(trip.status == "PENDING") MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer) {
+                        Badge(
+                            containerColor = when(trip.status) {
+                                "PENDING" -> MaterialTheme.colorScheme.secondaryContainer
+                                "IN_PROGRESS" -> MaterialTheme.colorScheme.primaryContainer
+                                "AWAITING_VERIFICATION" -> MaterialTheme.colorScheme.tertiaryContainer
+                                "COMPLETED" -> MaterialTheme.colorScheme.surfaceVariant
+                                else -> MaterialTheme.colorScheme.secondaryContainer
+                            }
+                        ) {
                             Text(trip.status, modifier = Modifier.padding(horizontal = 4.dp))
                         }
                     }
@@ -330,14 +363,53 @@ fun TripManagementCard(trip: Trip, onEdit: () -> Unit, onDelete: () -> Unit) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text("Driver: ${trip.driverName ?: "Unassigned"}", style = MaterialTheme.typography.bodyMedium)
                     Text("Vehicle: ${trip.vehicleInfo ?: "None"}", style = MaterialTheme.typography.bodyMedium)
+                    
+                    // Show start/stop times
+                    if (trip.startedAt != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Started: ${trip.startedAt.toDate().toString().substring(0, 16)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                    if (trip.stoppedAt != null) {
+                        Text(
+                            "Stopped: ${trip.stoppedAt.toDate().toString().substring(0, 16)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                    
+                    // Show expenses total if any
+                    if (trip.expenses.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val totalExpenses = trip.expenses.sumOf { it.amount }
+                        Text(
+                            "Total Expenses: $${String.format("%.2f", totalExpenses)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
-                Row {
-                    IconButton(onClick = onEdit) {
-                        Icon(Icons.Filled.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.primary)
+                Column {
+                    if (trip.status == "AWAITING_VERIFICATION" && onVerify != null) {
+                        Button(
+                            onClick = onVerify,
+                            modifier = Modifier.padding(bottom = 4.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+                        ) {
+                            Text("Verify", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
-                    IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                    Row {
+                        IconButton(onClick = onEdit) {
+                            Icon(Icons.Filled.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.primary)
+                        }
+                        IconButton(onClick = { showDeleteConfirm = true }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                        }
                     }
                 }
             }

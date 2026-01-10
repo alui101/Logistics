@@ -18,10 +18,25 @@ data class Trip(
     val destination: String = "",
     val description: String = "",
     val loadType: String = "Dry Van", // Dry Van, Vegetable, Frozen, Ambient
+    val foodLimit: Double = 0.0, // Food expense limit set by admin/manager
 
     // Status & Time
-    val status: String = "PENDING", // PENDING, IN_PROGRESS, COMPLETED
+    val status: String = "PENDING", // PENDING, IN_PROGRESS, AWAITING_VERIFICATION, COMPLETED
     val scheduledDate: Timestamp? = null,
     val createdAt: Timestamp = Timestamp.now(),
-    val startPhotos: Map<String, String> = emptyMap()
+    val startedAt: Timestamp? = null, // When driver started the trip
+    val stoppedAt: Timestamp? = null, // When driver stopped/completed the trip
+    val startPhotos: Map<String, String> = emptyMap(), // Pre-trip inspection photos
+    val completionPhotos: Map<String, String> = emptyMap(), // End-of-trip inspection photos
+    val finalMileage: Int? = null, // Entered by admin/manager after verification
+    val expenses: List<Expense> = emptyList() // List of expenses for this trip
+)
+
+data class Expense(
+    val id: String = "",
+    val type: String = "", // fuel, visas, tips, hotel, food, repairs
+    val amount: Double = 0.0,
+    val description: String = "",
+    val receiptPhotoUrl: String? = null, // URL to photo in Firebase Storage
+    val createdAt: Timestamp = Timestamp.now()
 )

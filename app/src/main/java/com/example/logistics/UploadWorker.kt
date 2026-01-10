@@ -22,6 +22,8 @@ class UploadWorker(
         val tripId = inputData.getString("tripId") ?: return Result.failure()
         val filePaths = inputData.getStringArray("filePaths") ?: return Result.failure()
         val labels = inputData.getStringArray("labels") ?: return Result.failure()
+        val photoType = inputData.getString("photoType") ?: "start" // "start" or "completion"
+        val updateStatus = inputData.getBoolean("updateStatus", true) // Whether to update trip status
 
         val storageRef = FirebaseStorage.getInstance().reference
         val db = FirebaseFirestore.getInstance()
@@ -39,8 +41,13 @@ class UploadWorker(
                     // Compress the image to ~20% quality before uploading
                     val compressedData = compressImage(file)
 
-                    // Upload to Storage
-                    val fileRef = storageRef.child("trips/$tripId/start_photos/$label.jpg")
+                    // Upload to Storage - different path based on photo type
+                    val storagePath = if (photoType == "completion") {
+                        "trips/$tripId/completion_photos/$label.jpg"
+                    } else {
+                        "trips/$tripId/start_photos/$label.jpg"
+                    }
+                    val fileRef = storageRef.child(storagePath)
                     fileRef.putBytes(compressedData).await() // Upload the small byte array
                     val downloadUrl = fileRef.downloadUrl.await()
 
@@ -49,10 +56,19 @@ class UploadWorker(
             }
 
             // 3. Update Firestore (Only after all uploads are done)
-            val updates = mapOf(
-                "startPhotos" to uploadedUrls,
-                "status" to "IN_PROGRESS"
-            )
+            val updates = mutableMapOf<String, Any>()
+            
+            if (photoType == "completion") {
+                updates["completionPhotos"] = uploadedUrls
+                if (updateStatus) {
+                    updates["status"] = "AWAITING_VERIFICATION"
+                }
+            } else {
+                updates["startPhotos"] = uploadedUrls
+                if (updateStatus) {
+                    updates["status"] = "IN_PROGRESS"
+                }
+            }
 
             db.collection(Constants.COLLECTION_TRIPS).document(tripId).update(updates).await()
 

@@ -182,6 +182,16 @@ fun AppNavigation(
         composable(Constants.ROUTE_MEDIA_MANAGER) {
             MediaManagerScreen(navController = navController)
         }
+
+        // 3. Trip Verification Route
+        composable("${Constants.ROUTE_TRIP_VERIFICATION}/{tripId}") { backStackEntry ->
+            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+            TripVerificationScreen(
+                navController = navController,
+                tripId = tripId,
+                onNavigateBack = debouncedPopBackStack
+            )
+        }
     }
 }
 fun androidx.navigation.NavController.popBackStackSafe() {

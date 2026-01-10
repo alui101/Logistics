@@ -92,7 +92,7 @@ class TripViewModel : ViewModel() {
         }
     }
 
-    fun updateTrip(tripId: String, origin: String, destination: String, description: String, loadType: String, selectedDriver: UserItem?, selectedVehicle: Vehicle?) {
+    fun updateTrip(tripId: String, origin: String, destination: String, description: String, loadType: String, foodLimit: Double, selectedDriver: UserItem?, selectedVehicle: Vehicle?) {
         if (origin.isBlank() || destination.isBlank()) {
             _uiState.value = _uiState.value.copy(errorMessage = "Origin and Destination are required")
             return
@@ -105,6 +105,7 @@ class TripViewModel : ViewModel() {
                     "destination" to destination,
                     "description" to description,
                     "loadType" to loadType,
+                    "foodLimit" to foodLimit,
                     "driverId" to selectedDriver?.uid,
                     "driverName" to selectedDriver?.email,
                     "vehicleId" to selectedVehicle?.id,
@@ -118,7 +119,7 @@ class TripViewModel : ViewModel() {
         }
     }
 
-    fun createTrip(origin: String, destination: String, description: String, loadType: String, selectedDriver: UserItem?, selectedVehicle: Vehicle?) {
+    fun createTrip(origin: String, destination: String, description: String, loadType: String, foodLimit: Double, selectedDriver: UserItem?, selectedVehicle: Vehicle?) {
         if (origin.isBlank() || destination.isBlank()) {
             _uiState.value = _uiState.value.copy(errorMessage = "Origin and Destination are required")
             return
@@ -133,6 +134,7 @@ class TripViewModel : ViewModel() {
                     destination = destination,
                     description = description,
                     loadType = loadType,
+                    foodLimit = foodLimit,
                     driverId = selectedDriver?.uid,
                     driverName = selectedDriver?.email,
                     vehicleId = selectedVehicle?.id,
@@ -199,6 +201,16 @@ class TripViewModel : ViewModel() {
     ) {
         _uiState.value = _uiState.value.copy(isLoading = true)
 
+        // Set startedAt timestamp immediately
+        viewModelScope.launch {
+            try {
+                db.collection(Constants.COLLECTION_TRIPS).document(tripId)
+                    .update("startedAt", com.google.firebase.Timestamp.now()).await()
+            } catch (e: Exception) {
+                // Continue even if timestamp update fails
+            }
+        }
+
         // 1. Convert URIs to File Paths so the Worker can read them
         val labels = photoUris.keys.toTypedArray()
         val paths = photoUris.values.map { uri ->
@@ -209,7 +221,9 @@ class TripViewModel : ViewModel() {
         val workData = workDataOf(
             "tripId" to tripId,
             "labels" to labels,
-            "filePaths" to paths
+            "filePaths" to paths,
+            "photoType" to "start",
+            "updateStatus" to true
         )
 
         val constraints = Constraints.Builder()
@@ -226,6 +240,156 @@ class TripViewModel : ViewModel() {
 
         _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Upload started in background")
         onSuccess()
+    }
+
+    // Upload completion photos and stop trip
+    fun uploadCompletionPhotosAndStopTrip(
+        context: Context,
+        tripId: String,
+        photoUris: Map<String, Uri>,
+        onSuccess: () -> Unit
+    ) {
+        _uiState.value = _uiState.value.copy(isLoading = true)
+
+        // Set stoppedAt timestamp immediately
+        viewModelScope.launch {
+            try {
+                db.collection(Constants.COLLECTION_TRIPS).document(tripId)
+                    .update("stoppedAt", com.google.firebase.Timestamp.now()).await()
+            } catch (e: Exception) {
+                // Continue even if timestamp update fails
+            }
+        }
+
+        val labels = photoUris.keys.toTypedArray()
+        val paths = photoUris.values.map { uri ->
+            val file = File(context.cacheDir, uri.lastPathSegment ?: "temp")
+            file.absolutePath
+        }.toTypedArray()
+
+        val workData = workDataOf(
+            "tripId" to tripId,
+            "labels" to labels,
+            "filePaths" to paths,
+            "photoType" to "completion",
+            "updateStatus" to true
+        )
+
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val uploadWork = OneTimeWorkRequestBuilder<UploadWorker>()
+            .setInputData(workData)
+            .setConstraints(constraints)
+            .addTag("trip_upload")
+            .build()
+
+        WorkManager.getInstance(context).enqueue(uploadWork)
+
+        _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Completion photos uploading in background")
+        onSuccess()
+    }
+
+    // Add expense to trip
+    fun addExpense(
+        context: Context,
+        tripId: String,
+        expenseType: String,
+        amount: Double,
+        description: String,
+        receiptPhotoUri: Uri?,
+        onSuccess: () -> Unit
+    ) {
+        _uiState.value = _uiState.value.copy(isLoading = true)
+        
+        viewModelScope.launch {
+            try {
+                var photoUrl: String? = null
+                
+                // Upload receipt photo if provided
+                if (receiptPhotoUri != null) {
+                    val storageRef = com.google.firebase.storage.FirebaseStorage.getInstance().reference
+                    // Read from FileProvider URI using ContentResolver
+                    val inputStream = context.contentResolver.openInputStream(receiptPhotoUri)
+                    if (inputStream != null) {
+                        val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+                        inputStream.close()
+                        
+                        if (bitmap != null) {
+                            val outputStream = java.io.ByteArrayOutputStream()
+                            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 20, outputStream)
+                            val compressedData = outputStream.toByteArray()
+                            
+                            val expenseId = db.collection(Constants.COLLECTION_TRIPS)
+                                .document(tripId)
+                                .collection("expenses")
+                                .document()
+                                .id
+                            val photoRef = storageRef.child("trips/$tripId/expenses/${expenseId}_receipt.jpg")
+                            photoRef.putBytes(compressedData).await()
+                            photoUrl = photoRef.downloadUrl.await().toString()
+                        }
+                    }
+                }
+
+                // Get current trip to update expenses list
+                val tripDoc = db.collection(Constants.COLLECTION_TRIPS).document(tripId).get().await()
+                val currentExpenses = tripDoc.get("expenses") as? List<Map<String, Any>> ?: emptyList()
+                
+                val expenseId = db.collection(Constants.COLLECTION_TRIPS)
+                    .document(tripId)
+                    .collection("expenses")
+                    .document()
+                    .id
+                
+                val newExpenseMap = mutableMapOf<String, Any>(
+                    "id" to expenseId,
+                    "type" to expenseType,
+                    "amount" to amount,
+                    "description" to description,
+                    "createdAt" to com.google.firebase.Timestamp.now()
+                )
+                
+                if (photoUrl != null) {
+                    newExpenseMap["receiptPhotoUrl"] = photoUrl
+                }
+                
+                // Update trip's expenses list
+                db.collection(Constants.COLLECTION_TRIPS).document(tripId)
+                    .update("expenses", currentExpenses + newExpenseMap).await()
+
+                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Expense added successfully")
+                onSuccess()
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to add expense: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    private fun compressImage(file: File): ByteArray {
+        val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+        val outputStream = java.io.ByteArrayOutputStream()
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 20, outputStream)
+        return outputStream.toByteArray()
+    }
+
+    // Verify and finalize trip (Admin/Manager only)
+    fun verifyAndFinalizeTrip(tripId: String, finalMileage: Int) {
+        _uiState.value = _uiState.value.copy(isLoading = true)
+        viewModelScope.launch {
+            try {
+                db.collection(Constants.COLLECTION_TRIPS).document(tripId).update(
+                    mapOf(
+                        "status" to "COMPLETED",
+                        "finalMileage" to finalMileage
+                    )
+                ).await()
+                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Trip finalized successfully")
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to finalize trip: ${e.localizedMessage}")
+            }
+        }
     }
 
     fun clearMessages() {
