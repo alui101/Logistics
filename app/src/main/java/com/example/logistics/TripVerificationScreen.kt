@@ -50,6 +50,10 @@ fun TripVerificationScreen(
         if (cachedTrip == null) {
             viewModel.loadSingleTrip(tripId)
         }
+        // Load vehicles to get current mileage for validation
+        if (state.vehicles.isEmpty()) {
+            viewModel.loadDataForManager()
+        }
     }
 
     val trip = state.trips.find { it.id == tripId }
@@ -134,6 +138,21 @@ fun TripVerificationScreen(
     val isCompleted = trip.status == "COMPLETED"
     // Always show details by default - when navigating from list, details should be visible immediately
     var showDetails by remember { mutableStateOf(true) }
+    
+    // Get the vehicle for this trip to check current mileage
+    val vehicle = trip.vehicleId?.let { vehicleId ->
+        state.vehicles.find { it.id == vehicleId }
+    }
+    
+    // Validate mileage: finalMileage must be >= vehicle.currentMileage
+    val mileageValidationError = remember(finalMileage, vehicle) {
+        if (!isCompleted && vehicle != null && finalMileage.isNotBlank()) {
+            val mileage = finalMileage.toIntOrNull()
+            if (mileage != null && mileage < vehicle.currentMileage) {
+                "Final mileage ($mileage) cannot be less than vehicle's current mileage (${vehicle.currentMileage})"
+            } else null
+        } else null
+    }
     
     // Initialize and update fields when trip data changes
     LaunchedEffect(trip.finalMileage, trip.moneyEarned, trip.additionalCosts) {
@@ -390,6 +409,17 @@ fun TripVerificationScreen(
                 // Final Mileage Entry
                 Text("Enter Final Mileage", style = MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(8.dp))
+                
+                // Show current vehicle mileage if available
+                if (vehicle != null && !isCompleted) {
+                    Text(
+                        "Current Vehicle Mileage: ${vehicle.currentMileage}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                
                 OutlinedTextField(
                     value = finalMileage,
                     onValueChange = { if (!isCompleted) finalMileage = it },
@@ -398,7 +428,9 @@ fun TripVerificationScreen(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     placeholder = { Text("e.g., 125000") },
                     enabled = !isCompleted,
-                    readOnly = isCompleted
+                    readOnly = isCompleted,
+                    isError = mileageValidationError != null,
+                    supportingText = mileageValidationError?.let { { Text(it) } }
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -434,12 +466,20 @@ fun TripVerificationScreen(
                                 // Show error - handled by viewModel
                                 return@Button
                             }
+                            // Additional validation: check mileage against vehicle
+                            if (vehicle != null && mileage < vehicle.currentMileage) {
+                                // Error will be shown in the text field
+                                return@Button
+                            }
                             val earned = moneyEarned.toDoubleOrNull() ?: 0.0
                             val additional = additionalCosts.toDoubleOrNull() ?: 0.0
                             viewModel.verifyAndFinalizeTrip(trip.id, mileage, earned, additional)
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !state.isLoading && finalMileage.toIntOrNull() != null && trip.completionPhotos.isNotEmpty()
+                        enabled = !state.isLoading && 
+                                 finalMileage.toIntOrNull() != null && 
+                                 trip.completionPhotos.isNotEmpty() &&
+                                 mileageValidationError == null
                     ) {
                         if (state.isLoading) {
                             CircularProgressIndicator(

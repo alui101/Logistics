@@ -573,6 +573,52 @@ class TripViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(isLoading = true)
         viewModelScope.launch {
             try {
+                // Get the trip to access vehicleId
+                val tripDoc = db.collection(Constants.COLLECTION_TRIPS).document(tripId).get().await()
+                val trip = tripDoc.toObject(Trip::class.java)
+                
+                if (trip == null) {
+                    _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Trip not found")
+                    return@launch
+                }
+                
+                // Validate mileage if vehicle is assigned
+                var vehicleUpdateFailed = false
+                if (trip.vehicleId != null && trip.vehicleId.isNotBlank()) {
+                    try {
+                        val vehicleDoc = db.collection(Constants.COLLECTION_VEHICLES).document(trip.vehicleId).get().await()
+                        val vehicle = vehicleDoc.toObject(Vehicle::class.java)
+                        
+                        if (vehicle != null) {
+                            // Validate that final mileage is not less than current vehicle mileage
+                            if (finalMileage < vehicle.currentMileage) {
+                                _uiState.value = _uiState.value.copy(
+                                    isLoading = false,
+                                    errorMessage = "Final mileage ($finalMileage) cannot be less than vehicle's current mileage (${vehicle.currentMileage})"
+                                )
+                                return@launch
+                            }
+                            
+                            // Try to update vehicle mileage to match finalized mileage
+                            try {
+                                db.collection(Constants.COLLECTION_VEHICLES).document(trip.vehicleId)
+                                    .update("currentMileage", finalMileage).await()
+                            } catch (e: Exception) {
+                                // If vehicle update fails (e.g., permission denied), continue with trip finalization
+                                // but mark that vehicle update failed
+                                vehicleUpdateFailed = true
+                                // Log the error but don't block trip finalization
+                                android.util.Log.w("TripViewModel", "Failed to update vehicle mileage: ${e.message}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // If we can't even read the vehicle, still allow trip finalization
+                        // but mark that vehicle update failed
+                        vehicleUpdateFailed = true
+                        android.util.Log.w("TripViewModel", "Failed to read vehicle for validation: ${e.message}")
+                    }
+                }
+                
                 val updates = mutableMapOf<String, Any>(
                     "status" to "COMPLETED",
                     "finalMileage" to finalMileage
@@ -589,7 +635,14 @@ class TripViewModel : ViewModel() {
                 db.collection(Constants.COLLECTION_TRIPS).document(tripId).update(updates).await()
                 // Reload the trip to get updated status
                 loadSingleTrip(tripId)
-                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Trip finalized successfully")
+                
+                // Show appropriate success message
+                val successMsg = if (vehicleUpdateFailed) {
+                    "Trip finalized successfully. Note: Vehicle mileage could not be updated (permission denied). Please update manually."
+                } else {
+                    "Trip finalized successfully"
+                }
+                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = successMsg)
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to finalize trip: ${e.localizedMessage}")
             }
