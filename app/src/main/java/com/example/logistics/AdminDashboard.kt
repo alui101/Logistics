@@ -5,14 +5,23 @@ package com.example.logistics
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import coil.ImageLoader
 import com.google.firebase.auth.FirebaseAuth
+import android.widget.Toast
 @Composable
 fun AdminDashboard(navController: NavController, auth: FirebaseAuth,onNavigateBack: () -> Unit = {}) {
+    val context = LocalContext.current
+    val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
+    var showCacheClearDialog by remember { mutableStateOf(false) }
+    
     Scaffold(
         topBar = {
             TopAppBar(
@@ -23,6 +32,9 @@ fun AdminDashboard(navController: NavController, auth: FirebaseAuth,onNavigateBa
                     actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                 ),
                 actions = {
+                    IconButton(onClick = { showCacheClearDialog = true }) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onPrimary)
+                    }
                     TextButton(onClick = {
                         auth.signOut()
                         navController.navigate(Constants.ROUTE_LOGIN) {
@@ -112,5 +124,28 @@ fun AdminDashboard(navController: NavController, auth: FirebaseAuth,onNavigateBa
                 }
             }
         }
+    }
+    
+    // Cache clear confirmation dialog
+    if (showCacheClearDialog) {
+        AlertDialog(
+            onDismissRequest = { showCacheClearDialog = false },
+            title = { Text("Clear Image Cache") },
+            text = { Text("This will clear all cached images. Images will need to be reloaded from the network. Continue?") },
+            confirmButton = {
+                Button(onClick = {
+                    ImageLoaderConfig.clearCache(context, imageLoader)
+                    Toast.makeText(context, "Image cache cleared", Toast.LENGTH_SHORT).show()
+                    showCacheClearDialog = false
+                }) {
+                    Text("Clear Cache")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCacheClearDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

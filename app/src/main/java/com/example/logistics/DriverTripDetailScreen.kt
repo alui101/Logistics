@@ -32,6 +32,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
+import kotlinx.coroutines.delay
 import java.io.File
 
 @Composable
@@ -54,6 +55,26 @@ fun DriverTripDetailScreen(
 
     // Find the specific trip from the list
     val trip = state.trips.find { it.id == tripId }
+    
+    // Periodically refresh trip data if photos are still uploading
+    LaunchedEffect(trip?.startedAt, trip?.startPhotos?.size, trip?.status) {
+        val currentTrip = state.trips.find { it.id == tripId }
+        if (currentTrip != null && currentTrip.startedAt != null && currentTrip.status == "PENDING" && currentTrip.startPhotos.isEmpty()) {
+            // Photos are still uploading - refresh trip data every 3 seconds until upload completes
+            var shouldContinue = true
+            while (shouldContinue) {
+                delay(3000)
+                viewModel.loadSingleTrip(tripId)
+                // Check updated state after a brief delay to allow state to update
+                delay(500)
+                val updatedTrip = state.trips.find { it.id == tripId }
+                // Stop refreshing if photos are uploaded or status changed
+                if (updatedTrip == null || updatedTrip.startPhotos.isNotEmpty() || updatedTrip.status != "PENDING") {
+                    shouldContinue = false
+                }
+            }
+        }
+    }
 
     // Show error and success messages
     LaunchedEffect(state.errorMessage, state.successMessage) {
@@ -79,7 +100,6 @@ fun DriverTripDetailScreen(
     var expenseDescription by remember { mutableStateOf("") }
     var expenseReceiptUri by remember { mutableStateOf<Uri?>(null) }
     val expenseTypes = listOf("fuel", "visas", "tips", "hotel", "food", "repairs")
-    val expenseTypesRequiringPhoto = listOf("fuel", "visas", "repairs")
 
     // Temp variables for camera logic
     var currentPhotoLabel by remember { mutableStateOf("") }
@@ -174,8 +194,41 @@ fun DriverTripDetailScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
-            // Logic: PENDING vs IN PROGRESS
-            if (trip.status == "PENDING") {
+            // Check if photos are still uploading (trip has startedAt but no startPhotos yet)
+            val photosStillUploading = trip.startedAt != null && trip.status == "PENDING" && trip.startPhotos.isEmpty()
+            
+            if (photosStillUploading) {
+                // Photos are still uploading - show message and prevent access
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "Photos Still Uploading",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Please wait while your start photos are being uploaded. The trip will be accessible once the upload is complete.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "You can check upload status in the Media Manager.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            } else if (trip.status == "PENDING") {
                 Text(
                     "Pre-Trip Photos Required",
                     style = MaterialTheme.typography.titleMedium,
@@ -226,7 +279,7 @@ fun DriverTripDetailScreen(
                             modifier = Modifier.size(24.dp)
                         )
                     } else {
-                        Text("Start Trip (Background Upload)")
+                        Text("Start Trip")
                     }
                 }
 
@@ -361,7 +414,7 @@ fun DriverTripDetailScreen(
                             modifier = Modifier.size(24.dp)
                         )
                     } else {
-                        Text("Complete Trip (Background Upload)")
+                        Text("Complete Trip")
                     }
                 }
                 
@@ -392,7 +445,7 @@ fun DriverTripDetailScreen(
                     expenseDescription = expenseDescription,
                     onExpenseDescriptionChange = { expenseDescription = it },
                     receiptUri = expenseReceiptUri,
-                    requiresPhoto = expenseTypesRequiringPhoto.contains(selectedExpenseType),
+                    requiresPhoto = false, // Photos are now optional for all expenses
                     onTakeReceiptPhoto = { launchExpenseReceiptCamera() },
                     onDismiss = { 
                         showExpenseDialog = false
@@ -403,11 +456,6 @@ fun DriverTripDetailScreen(
                     onConfirm = {
                         if (expenseAmount.isBlank() || expenseAmount.toDoubleOrNull() == null) {
                             Toast.makeText(context, "Please enter a valid amount", Toast.LENGTH_SHORT).show()
-                            return@ExpenseDialog
-                        }
-                        
-                        if (expenseTypesRequiringPhoto.contains(selectedExpenseType) && expenseReceiptUri == null) {
-                            Toast.makeText(context, "Please take a photo of the receipt", Toast.LENGTH_SHORT).show()
                             return@ExpenseDialog
                         }
                         
@@ -610,36 +658,34 @@ fun ExpenseDialog(
                     maxLines = 3
                 )
 
-                // Receipt Photo (if required)
-                if (requiresPhoto) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onTakeReceiptPhoto() },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                // Receipt Photo (optional for all expenses)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onTakeReceiptPhoto() },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (receiptUri != null) {
-                                Icon(Icons.Filled.CheckCircle, contentDescription = "Done", tint = Color(0xFF4CAF50))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Card(modifier = Modifier.size(40.dp)) {
-                                    Image(
-                                        painter = rememberAsyncImagePainter(receiptUri),
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Receipt photo taken", style = MaterialTheme.typography.bodyMedium)
-                            } else {
-                                Icon(Icons.Filled.CameraAlt, contentDescription = "Take Photo")
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Take Receipt Photo (Required)", style = MaterialTheme.typography.bodyMedium)
+                        if (receiptUri != null) {
+                            Icon(Icons.Filled.CheckCircle, contentDescription = "Done", tint = Color(0xFF4CAF50))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Card(modifier = Modifier.size(40.dp)) {
+                                Image(
+                                    painter = rememberAsyncImagePainter(receiptUri),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
                             }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Receipt photo taken", style = MaterialTheme.typography.bodyMedium)
+                        } else {
+                            Icon(Icons.Filled.CameraAlt, contentDescription = "Take Photo")
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Take Receipt Photo (Optional)", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
@@ -648,7 +694,7 @@ fun ExpenseDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
-                enabled = !isLoading && expenseAmount.isNotBlank() && (!requiresPhoto || receiptUri != null)
+                enabled = !isLoading && expenseAmount.isNotBlank()
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(

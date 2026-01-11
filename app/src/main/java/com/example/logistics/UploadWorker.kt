@@ -37,6 +37,11 @@ class UploadWorker(
         ))
 
         try {
+            // Bug 1 Fix: Validate expenseId before using it in storage path
+            if (photoType == "expense_receipt" && expenseId == null) {
+                return Result.failure()
+            }
+            
             // 2. Loop through files
             for (i in filePaths.indices) {
                 val path = filePaths[i]
@@ -45,13 +50,16 @@ class UploadWorker(
 
                 if (file.exists()) {
                     // --- SMART COMPRESSION ---
-                    // Compress the image to ~20% quality before uploading
-                    val compressedData = compressImage(file)
-
+                    // Bug 3 Fix: Check for null bitmap before compressing
+                    val compressedData = compressImage(file) ?: continue // Skip if compression fails
+                    
                     // Upload to Storage - different path based on photo type
                     val storagePath = when (photoType) {
                         "completion" -> "trips/$tripId/completion_photos/$label.jpg"
-                        "expense_receipt" -> "trips/$tripId/expenses/${expenseId}_receipt.jpg"
+                        "expense_receipt" -> {
+                            // expenseId is guaranteed non-null here due to check above
+                            "trips/$tripId/expenses/${expenseId!!}_receipt.jpg"
+                        }
                         else -> "trips/$tripId/start_photos/$label.jpg"
                     }
                     val fileRef = storageRef.child(storagePath)
@@ -82,15 +90,23 @@ class UploadWorker(
                     .update("expenses", updatedExpenses).await()
             } else {
                 // Update trip photos (start or completion)
+                // Bug 2 Fix: Merge with existing photos instead of replacing
+                val tripDoc = db.collection(Constants.COLLECTION_TRIPS).document(tripId).get().await()
                 val updates = mutableMapOf<String, Any>()
                 
                 if (photoType == "completion") {
-                    updates["completionPhotos"] = uploadedUrls
+                    val existingPhotos = tripDoc.get("completionPhotos") as? Map<String, String> ?: emptyMap()
+                    val mergedPhotos = existingPhotos.toMutableMap()
+                    mergedPhotos.putAll(uploadedUrls)
+                    updates["completionPhotos"] = mergedPhotos
                     if (updateStatus) {
                         updates["status"] = "AWAITING_VERIFICATION"
                     }
                 } else {
-                    updates["startPhotos"] = uploadedUrls
+                    val existingPhotos = tripDoc.get("startPhotos") as? Map<String, String> ?: emptyMap()
+                    val mergedPhotos = existingPhotos.toMutableMap()
+                    mergedPhotos.putAll(uploadedUrls)
+                    updates["startPhotos"] = mergedPhotos
                     if (updateStatus) {
                         updates["status"] = "IN_PROGRESS"
                     }
@@ -115,8 +131,9 @@ class UploadWorker(
     }
 
     // Helper: Turns a huge file into a tiny JPEG byte array
-    private fun compressImage(file: File): ByteArray {
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath)
+    // Bug 3 Fix: Return null if bitmap decoding fails
+    private fun compressImage(file: File): ByteArray? {
+        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return null
         val outputStream = ByteArrayOutputStream()
         // Quality 20 = High compression, perfectly fine for inspection photos
         bitmap.compress(Bitmap.CompressFormat.JPEG, 20, outputStream)

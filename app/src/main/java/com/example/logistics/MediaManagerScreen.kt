@@ -11,32 +11,63 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.livedata.observeAsState // <--- Fixed by the dependency update
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
 import androidx.navigation.NavController
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MediaManagerScreen(navController: NavController) {
+fun MediaManagerScreen(
+    navController: NavController,
+    onNavigateBack: () -> Unit = { navController.safePopBackStack() }
+) {
     val context = LocalContext.current
+    var isNavigating by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     // observeAsState will now work because of the gradle dependency
     val workInfos by WorkManager.getInstance(context)
         .getWorkInfosByTagLiveData("trip_upload")
         .observeAsState(initial = emptyList())
 
+    // Enhanced safe navigation with local debouncing and lifecycle check
+    val safeNavigateBack: () -> Unit = {
+        if (!isNavigating) {
+            val isResumed = navController.currentBackStackEntry?.lifecycle?.currentState == Lifecycle.State.RESUMED
+            if (isResumed && navController.previousBackStackEntry != null) {
+                isNavigating = true
+                // Use the passed onNavigateBack function (which is already debounced from AppNavigation)
+                onNavigateBack()
+                scope.launch {
+                    delay(500)
+                    isNavigating = false
+                }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Upload Status") },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = safeNavigateBack,
+                        enabled = !isNavigating
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },

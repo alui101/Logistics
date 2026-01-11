@@ -6,6 +6,7 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import coil.util.DebugLogger
+import java.io.File
 
 object ImageLoaderConfig {
     fun createImageLoader(context: Context): ImageLoader {
@@ -24,5 +25,21 @@ object ImageLoaderConfig {
             .respectCacheHeaders(false) // Always use cache if available
             .logger(DebugLogger()) // For debugging
             .build()
+    }
+    
+    /**
+     * Clears both memory and disk cache for images
+     */
+    fun clearCache(context: Context, imageLoader: ImageLoader) {
+        // Clear memory cache
+        imageLoader.memoryCache?.clear()
+        
+        // Clear disk cache
+        val cacheDir = context.cacheDir.resolve("image_cache")
+        if (cacheDir.exists() && cacheDir.isDirectory) {
+            cacheDir.listFiles()?.forEach { file ->
+                file.delete()
+            }
+        }
     }
 }

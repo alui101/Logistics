@@ -69,11 +69,15 @@ fun AppNavigation(
     // Provide debounced navigation function for TopAppBar back buttons
     val debouncedPopBackStack: () -> Unit = {
         if (!isNavigating) {
-            isNavigating = true
-            navController.popBackStack()
-            scope.launch {
-                delay(500)
-                isNavigating = false
+            // Check if screen is resumed before navigating
+            val isResumed = navController.currentBackStackEntry?.lifecycle?.currentState == androidx.lifecycle.Lifecycle.State.RESUMED
+            if (isResumed && navController.previousBackStackEntry != null) {
+                isNavigating = true
+                navController.popBackStack()
+                scope.launch {
+                    delay(500)
+                    isNavigating = false
+                }
             }
         }
     }
@@ -180,7 +184,10 @@ fun AppNavigation(
 
         // 2. Media Manager Route
         composable(Constants.ROUTE_MEDIA_MANAGER) {
-            MediaManagerScreen(navController = navController)
+            MediaManagerScreen(
+                navController = navController,
+                onNavigateBack = debouncedPopBackStack
+            )
         }
 
         // 3. Trip Verification Route

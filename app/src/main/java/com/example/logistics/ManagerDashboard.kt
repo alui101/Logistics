@@ -14,16 +14,23 @@ import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import coil.ImageLoader
+import coil.request.ImageRequest
+import coil.request.CachePolicy
+import coil.size.Size
 import com.google.firebase.auth.FirebaseAuth
+import android.widget.Toast
 
 @Composable
 fun TripManagementScreen(
@@ -34,6 +41,9 @@ fun TripManagementScreen(
     onNavigateBack: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
+    var showCacheClearDialog by remember { mutableStateOf(false) }
 
     // -- STATE VARIABLES --
     var showForm by remember { mutableStateOf(false) }
@@ -60,6 +70,47 @@ fun TripManagementScreen(
     LaunchedEffect(Unit) {
         viewModel.loadDataForManager()
         viewModel.loadAllTrips()
+    }
+    
+    // Preload images when trips are loaded
+    LaunchedEffect(state.trips.size) {
+        state.trips.forEach { trip ->
+            // Preload start photos
+            trip.startPhotos.values.forEach { url ->
+                imageLoader.enqueue(
+                    ImageRequest.Builder(context)
+                        .data(url)
+                        .size(Size(800, 600))
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build()
+                )
+            }
+            // Preload completion photos
+            trip.completionPhotos.values.forEach { url ->
+                imageLoader.enqueue(
+                    ImageRequest.Builder(context)
+                        .data(url)
+                        .size(Size(800, 600))
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build()
+                )
+            }
+            // Preload expense receipt photos
+            trip.expenses.forEach { expense ->
+                expense.receiptPhotoUrl?.let { url ->
+                    imageLoader.enqueue(
+                        ImageRequest.Builder(context)
+                            .data(url)
+                            .size(Size(800, 600))
+                            .memoryCachePolicy(CachePolicy.ENABLED)
+                            .diskCachePolicy(CachePolicy.ENABLED)
+                            .build()
+                    )
+                }
+            }
+        }
     }
 
     fun resetForm() {
@@ -118,6 +169,29 @@ fun TripManagementScreen(
             confirmButton = { TextButton(onClick = { viewModel.clearMessages() }) { Text("OK") } }
         )
     }
+    
+    // Cache clear confirmation dialog
+    if (showCacheClearDialog) {
+        AlertDialog(
+            onDismissRequest = { showCacheClearDialog = false },
+            title = { Text("Clear Image Cache") },
+            text = { Text("This will clear all cached images. Images will need to be reloaded from the network. Continue?") },
+            confirmButton = {
+                Button(onClick = {
+                    ImageLoaderConfig.clearCache(context, imageLoader)
+                    Toast.makeText(context, "Image cache cleared", Toast.LENGTH_SHORT).show()
+                    showCacheClearDialog = false
+                }) {
+                    Text("Clear Cache")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCacheClearDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -149,7 +223,12 @@ fun TripManagementScreen(
                 },
                 actions = {
                     if (isManagerRoot && !showForm) {
+                        IconButton(onClick = { showCacheClearDialog = true }) {
+                            Icon(Icons.Filled.Settings, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
                         TextButton(onClick = {
+                            // Cleanup listeners before logout to prevent permission errors
+                            viewModel.cleanupListeners()
                             auth.signOut()
                             navController.navigate(Constants.ROUTE_LOGIN) { popUpTo(0) }
                         }) { Text("Logout", color = MaterialTheme.colorScheme.onPrimary) }

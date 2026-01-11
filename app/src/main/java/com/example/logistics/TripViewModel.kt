@@ -4,14 +4,18 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import java.util.concurrent.TimeUnit
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
+import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +39,10 @@ class TripViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(TripState())
     val uiState: StateFlow<TripState> = _uiState.asStateFlow()
+    
+    // Store listener registrations to allow cleanup
+    private var tripsListenerRegistration: ListenerRegistration? = null
+    private var driverTripsListenerRegistration: ListenerRegistration? = null
 
     // --- MANAGER FUNCTIONS ---
     fun loadDataForManager() {
@@ -68,11 +76,18 @@ class TripViewModel : ViewModel() {
     }
 
     fun loadAllTrips() {
+        // Remove old listener if exists
+        tripsListenerRegistration?.remove()
+        
         _uiState.value = _uiState.value.copy(isLoading = true)
-        db.collection(Constants.COLLECTION_TRIPS)
+        tripsListenerRegistration = db.collection(Constants.COLLECTION_TRIPS)
             .orderBy("createdAt", Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, e ->
                 if (e != null) {
+                    // Ignore permission errors if user is logged out
+                    if (e.message?.contains("permission", ignoreCase = true) == true && auth.currentUser == null) {
+                        return@addSnapshotListener
+                    }
                     _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = e.localizedMessage)
                     return@addSnapshotListener
                 }
@@ -86,7 +101,53 @@ class TripViewModel : ViewModel() {
     fun deleteTrip(trip: Trip) {
         viewModelScope.launch {
             try {
+                val storage = FirebaseStorage.getInstance()
+                
+                // Delete all start photos
+                trip.startPhotos.values.forEach { photoUrl ->
+                    try {
+                        if (photoUrl.isNotEmpty()) {
+                            val photoRef = storage.getReferenceFromUrl(photoUrl)
+                            photoRef.delete().await()
+                        }
+                    } catch (e: Exception) {
+                        // Continue even if photo deletion fails
+                        android.util.Log.w("TripViewModel", "Failed to delete start photo: ${e.message}")
+                    }
+                }
+                
+                // Delete all completion photos
+                trip.completionPhotos.values.forEach { photoUrl ->
+                    try {
+                        if (photoUrl.isNotEmpty()) {
+                            val photoRef = storage.getReferenceFromUrl(photoUrl)
+                            photoRef.delete().await()
+                        }
+                    } catch (e: Exception) {
+                        // Continue even if photo deletion fails
+                        android.util.Log.w("TripViewModel", "Failed to delete completion photo: ${e.message}")
+                    }
+                }
+                
+                // Delete all expense receipt photos
+                trip.expenses.forEach { expense ->
+                    expense.receiptPhotoUrl?.let { photoUrl ->
+                        try {
+                            if (photoUrl.isNotEmpty()) {
+                                val photoRef = storage.getReferenceFromUrl(photoUrl)
+                                photoRef.delete().await()
+                            }
+                        } catch (e: Exception) {
+                            // Continue even if photo deletion fails
+                            android.util.Log.w("TripViewModel", "Failed to delete expense receipt photo: ${e.message}")
+                        }
+                    }
+                }
+                
+                // Delete the trip document from Firestore
                 db.collection(Constants.COLLECTION_TRIPS).document(trip.id).delete().await()
+                
+                _uiState.value = _uiState.value.copy(successMessage = "Trip and all photos deleted successfully")
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(errorMessage = "Failed to delete: ${e.localizedMessage}")
             }
@@ -152,6 +213,9 @@ class TripViewModel : ViewModel() {
     // --- DRIVER FUNCTIONS ---
 
     fun loadDriverTrips() {
+        // Remove old listener if exists
+        driverTripsListenerRegistration?.remove()
+        
         val currentUser = FirebaseAuth.getInstance().currentUser
         if (currentUser == null) {
             _uiState.value = _uiState.value.copy(errorMessage = "Not logged in")
@@ -159,10 +223,14 @@ class TripViewModel : ViewModel() {
         }
         _uiState.value = _uiState.value.copy(isLoading = true)
 
-        db.collection(Constants.COLLECTION_TRIPS)
+        driverTripsListenerRegistration = db.collection(Constants.COLLECTION_TRIPS)
             .whereEqualTo("driverId", currentUser.uid)
             .addSnapshotListener { snapshot, e ->
                 if (e != null) {
+                    // Ignore permission errors if user is logged out
+                    if (e.message?.contains("permission", ignoreCase = true) == true && auth.currentUser == null) {
+                        return@addSnapshotListener
+                    }
                     _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to load trips: ${e.localizedMessage}")
                     return@addSnapshotListener
                 }
@@ -210,7 +278,8 @@ class TripViewModel : ViewModel() {
     ) {
         _uiState.value = _uiState.value.copy(isLoading = true)
 
-        // Set startedAt timestamp immediately
+        // Set startedAt timestamp immediately but keep status as PENDING until photos upload
+        // This allows us to track that photos are being uploaded
         viewModelScope.launch {
             try {
                 db.collection(Constants.COLLECTION_TRIPS).document(tripId)
@@ -242,6 +311,11 @@ class TripViewModel : ViewModel() {
         val uploadWork = OneTimeWorkRequestBuilder<UploadWorker>()
             .setInputData(workData)
             .setConstraints(constraints)
+            .setBackoffCriteria(
+                BackoffPolicy.EXPONENTIAL,
+                15,
+                TimeUnit.MINUTES
+            )
             .addTag("trip_upload")
             .build()
 
@@ -291,6 +365,11 @@ class TripViewModel : ViewModel() {
         val uploadWork = OneTimeWorkRequestBuilder<UploadWorker>()
             .setInputData(workData)
             .setConstraints(constraints)
+            .setBackoffCriteria(
+                BackoffPolicy.EXPONENTIAL,
+                15,
+                TimeUnit.MINUTES
+            )
             .addTag("trip_upload")
             .build()
 
@@ -350,9 +429,14 @@ class TripViewModel : ViewModel() {
                     "createdAt" to com.google.firebase.Timestamp.now()
                 )
                 
-                // Save expense immediately (without photo URL)
-                db.collection(Constants.COLLECTION_TRIPS).document(tripId)
-                    .update("expenses", currentExpenses + newExpenseMap).await()
+                // Bug 4 Fix: Use Firestore transaction or FieldValue.arrayUnion for atomic updates
+                // Using runTransaction for atomic read-modify-write
+                db.runTransaction { transaction ->
+                    val tripRef = db.collection(Constants.COLLECTION_TRIPS).document(tripId)
+                    val currentDoc = transaction.get(tripRef)
+                    val existingExpenses = currentDoc.get("expenses") as? List<Map<String, Any>> ?: emptyList()
+                    transaction.update(tripRef, "expenses", existingExpenses + newExpenseMap)
+                }.await()
 
                 // If receipt photo provided, queue it as background task
                 if (receiptPhotoUri != null) {
@@ -393,6 +477,11 @@ class TripViewModel : ViewModel() {
                     val uploadWork = OneTimeWorkRequestBuilder<UploadWorker>()
                         .setInputData(workData)
                         .setConstraints(constraints)
+                        .setBackoffCriteria(
+                            BackoffPolicy.EXPONENTIAL,
+                            15,
+                            TimeUnit.MINUTES
+                        )
                         .addTag("trip_upload")
                         .build()
                     
@@ -422,9 +511,25 @@ class TripViewModel : ViewModel() {
         
         viewModelScope.launch {
             try {
-                // Get current trip to update expenses list
+                // Get current trip to update expenses list and find receipt photo URL
                 val tripDoc = db.collection(Constants.COLLECTION_TRIPS).document(tripId).get().await()
                 val currentExpenses = tripDoc.get("expenses") as? List<Map<String, Any>> ?: emptyList()
+                
+                // Find the expense to get its receipt photo URL
+                val expenseToDelete = currentExpenses.find { it["id"] == expenseId }
+                val receiptPhotoUrl = expenseToDelete?.get("receiptPhotoUrl") as? String
+                
+                // Delete receipt photo from Firebase Storage if it exists
+                if (receiptPhotoUrl != null && receiptPhotoUrl.isNotEmpty()) {
+                    try {
+                        val storage = FirebaseStorage.getInstance()
+                        val photoRef = storage.getReferenceFromUrl(receiptPhotoUrl)
+                        photoRef.delete().await()
+                    } catch (e: Exception) {
+                        // Continue even if photo deletion fails - log but don't block expense deletion
+                        android.util.Log.w("TripViewModel", "Failed to delete receipt photo: ${e.message}")
+                    }
+                }
                 
                 // Remove the expense with matching id
                 val updatedExpenses = currentExpenses.filterNot { it["id"] == expenseId }
@@ -448,6 +553,19 @@ class TripViewModel : ViewModel() {
         val outputStream = java.io.ByteArrayOutputStream()
         bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 20, outputStream)
         return outputStream.toByteArray()
+    }
+
+    // Cleanup listeners - call this before logout
+    fun cleanupListeners() {
+        tripsListenerRegistration?.remove()
+        tripsListenerRegistration = null
+        driverTripsListenerRegistration?.remove()
+        driverTripsListenerRegistration = null
+    }
+    
+    override fun onCleared() {
+        super.onCleared()
+        cleanupListeners()
     }
 
     // Verify and finalize trip (Admin/Manager only)
