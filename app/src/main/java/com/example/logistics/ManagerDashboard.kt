@@ -380,10 +380,15 @@ fun TripManagementScreen(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(state.trips) { trip ->
+                            val onDeleteCallback: (() -> Unit)? = if (isManagerRoot) {
+                                null
+                            } else {
+                                { viewModel.deleteTrip(trip) }
+                            }
                             TripManagementCard(
                                 trip = trip,
                                 onEdit = { onEditClick(trip) },
-                                onDelete = { viewModel.deleteTrip(trip) },
+                                onDelete = onDeleteCallback, // Only admins can delete
                                 onVerify = if (trip.status == "AWAITING_VERIFICATION") {
                                     { navController.navigate("${Constants.ROUTE_TRIP_VERIFICATION}/${trip.id}") }
                                 } else null,
@@ -403,7 +408,7 @@ fun TripManagementScreen(
 fun TripManagementCard(
     trip: Trip, 
     onEdit: () -> Unit, 
-    onDelete: () -> Unit,
+    onDelete: (() -> Unit)? = null, // Make nullable - only admins can delete
     onVerify: (() -> Unit)? = null,
     onViewPhotos: () -> Unit = {}
 ) {
@@ -412,7 +417,7 @@ fun TripManagementCard(
     var selectedPhotoUrl by remember { mutableStateOf<String?>(null) }
     var selectedPhotoLabel by remember { mutableStateOf<String?>(null) }
 
-    if (showDeleteConfirm) {
+    if (showDeleteConfirm && onDelete != null) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Delete Trip?") },
@@ -508,8 +513,11 @@ fun TripManagementCard(
                         IconButton(onClick = onEdit) {
                             Icon(Icons.Filled.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.primary)
                         }
-                        IconButton(onClick = { showDeleteConfirm = true }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                        // Only show delete button if onDelete is provided (admins only)
+                        if (onDelete != null) {
+                            IconButton(onClick = { showDeleteConfirm = true }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                            }
                         }
                     }
                 }
