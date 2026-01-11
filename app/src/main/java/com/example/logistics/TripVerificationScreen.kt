@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -93,9 +94,20 @@ fun TripVerificationScreen(
             }
         }
     }
-    var finalMileage by remember { mutableStateOf("") }
+    var finalMileage by remember { mutableStateOf(trip?.finalMileage?.toString() ?: "") }
+    var moneyEarned by remember { mutableStateOf(trip?.moneyEarned?.toString() ?: "") }
+    var additionalCosts by remember { mutableStateOf(trip?.additionalCosts?.toString() ?: "") }
     var selectedPhotoUrl by remember { mutableStateOf<String?>(null) }
     var selectedPhotoLabel by remember { mutableStateOf<String?>(null) }
+    
+    // Update fields when trip data changes
+    LaunchedEffect(trip?.finalMileage, trip?.moneyEarned, trip?.additionalCosts) {
+        trip?.let {
+            if (it.finalMileage != null) finalMileage = it.finalMileage.toString()
+            if (it.moneyEarned != null) moneyEarned = it.moneyEarned.toString()
+            if (it.additionalCosts != null) additionalCosts = it.additionalCosts.toString()
+        }
+    }
 
     if (trip == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -108,7 +120,7 @@ fun TripVerificationScreen(
         return
     }
 
-    if (trip.status != "AWAITING_VERIFICATION") {
+    if (trip.status != "AWAITING_VERIFICATION" && trip.status != "COMPLETED") {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("This trip is not awaiting verification", style = MaterialTheme.typography.titleMedium)
@@ -117,6 +129,17 @@ fun TripVerificationScreen(
             }
         }
         return
+    }
+    
+    val isCompleted = trip.status == "COMPLETED"
+    // Always show details by default - when navigating from list, details should be visible immediately
+    var showDetails by remember { mutableStateOf(true) }
+    
+    // Initialize and update fields when trip data changes
+    LaunchedEffect(trip.finalMileage, trip.moneyEarned, trip.additionalCosts) {
+        if (trip.finalMileage != null) finalMileage = trip.finalMileage.toString()
+        if (trip.moneyEarned != null) moneyEarned = trip.moneyEarned.toString()
+        if (trip.additionalCosts != null) additionalCosts = trip.additionalCosts.toString()
     }
 
     Scaffold(
@@ -143,100 +166,156 @@ fun TripVerificationScreen(
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Trip Info
-            Text("Trip #${trip.id.take(4).uppercase()}", style = MaterialTheme.typography.headlineSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("From: ${trip.origin}", style = MaterialTheme.typography.bodyLarge)
-            Text("To: ${trip.destination}", style = MaterialTheme.typography.bodyLarge)
-            
-            if (trip.startedAt != null) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "Started: ${trip.startedAt.toDate().toString()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-            }
-            if (trip.stoppedAt != null) {
-                Text(
-                    "Stopped: ${trip.stoppedAt.toDate().toString()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-
-            // Start Photos Section
-            if (trip.startPhotos.isNotEmpty()) {
-                Text("Start Photos", style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(8.dp))
-                PhotoGrid(
-                    photos = trip.startPhotos,
-                    onPhotoClick = { label, url ->
-                        selectedPhotoLabel = label
-                        selectedPhotoUrl = url
-                    }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            // Completion Photos
-            Text("Completion Photos", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            if (trip.completionPhotos.isEmpty()) {
-                Text("No completion photos available", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-            } else {
-                PhotoGrid(
-                    photos = trip.completionPhotos,
-                    onPhotoClick = { label, url ->
-                        selectedPhotoLabel = label
-                        selectedPhotoUrl = url
-                    }
-                )
-            }
-
-            // Expense Receipts Section
-            if (trip.expenses.isNotEmpty() && trip.expenses.any { it.receiptPhotoUrl != null }) {
-                Spacer(modifier = Modifier.height(24.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Expense Receipts", style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(8.dp))
-                trip.expenses.forEach { expense ->
-                    if (expense.receiptPhotoUrl != null) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clickable {
-                                    selectedPhotoLabel = "${expense.type.replaceFirstChar { it.uppercase() }} Receipt"
-                                    selectedPhotoUrl = expense.receiptPhotoUrl
-                                },
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            // Trip Finalized Message and View Details Button
+            if (isCompleted && !showDetails) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "${expense.type.replaceFirstChar { it.uppercase() }} - $${String.format("%.2f", expense.amount)}",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    if (expense.description.isNotEmpty()) {
-                                        Text(
-                                            text = expense.description,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.secondary
-                                        )
+                            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Trip Finalized",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = { showDetails = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("View Details")
+                        }
+                    }
+                }
+            } else {
+                // All details below (shown when not completed OR when showDetails is true for completed trips)
+                
+                // Trip Info
+                Text("Trip #${trip.id.take(4).uppercase()}", style = MaterialTheme.typography.headlineSmall)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("From: ${trip.origin}", style = MaterialTheme.typography.bodyLarge)
+                Text("To: ${trip.destination}", style = MaterialTheme.typography.bodyLarge)
+                
+                if (trip.startedAt != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Started: ${trip.startedAt.toDate().toString()}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                if (trip.stoppedAt != null) {
+                    Text(
+                        "Stopped: ${trip.stoppedAt.toDate().toString()}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+                
+                // Start Photos Section
+                if (trip.startPhotos.isNotEmpty()) {
+                    Text("Start Photos", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    PhotoGrid(
+                        photos = trip.startPhotos,
+                        onPhotoClick = { label: String, url: String ->
+                            if (!isCompleted) {
+                                selectedPhotoLabel = label
+                                selectedPhotoUrl = url
+                            }
+                        },
+                        isDisabled = isCompleted
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                // Completion Photos
+                Text("Completion Photos", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                if (trip.completionPhotos.isEmpty()) {
+                    Text("No completion photos available", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                } else {
+                    PhotoGrid(
+                        photos = trip.completionPhotos,
+                        onPhotoClick = { label: String, url: String ->
+                            if (!isCompleted) {
+                                selectedPhotoLabel = label
+                                selectedPhotoUrl = url
+                            }
+                        },
+                        isDisabled = isCompleted
+                    )
+                }
+
+                // Driver Expenses Section
+                if (trip.expenses.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(24.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Driver Expenses", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    trip.expenses.forEach { expense ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .then(
+                                if (expense.receiptPhotoUrl != null && !isCompleted) {
+                                    Modifier.clickable {
+                                        selectedPhotoLabel = "${expense.type.replaceFirstChar { it.uppercase() }} Receipt"
+                                        selectedPhotoUrl = expense.receiptPhotoUrl
                                     }
+                                } else {
+                                    Modifier
                                 }
+                            ),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isCompleted) 
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f) 
+                            else 
+                                MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${expense.type.replaceFirstChar { it.uppercase() }} - $${String.format("%.2f", expense.amount)}",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isCompleted) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface
+                                )
+                                if (expense.description.isNotEmpty()) {
+                                    Text(
+                                        text = expense.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                            }
+                            if (expense.receiptPhotoUrl != null && !isCompleted) {
                                 TextButton(
                                     onClick = {
                                         selectedPhotoLabel = "${expense.type.replaceFirstChar { it.uppercase() }} Receipt"
@@ -250,51 +329,138 @@ fun TripVerificationScreen(
                             }
                         }
                     }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Final Mileage Entry
-            Text("Enter Final Mileage", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = finalMileage,
-                onValueChange = { finalMileage = it },
-                label = { Text("Final Mileage") },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                placeholder = { Text("e.g., 125000") }
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Finalize Button
-            Button(
-                onClick = {
-                    val mileage = finalMileage.toIntOrNull()
-                    if (mileage == null) {
-                        // Show error - handled by viewModel
-                        return@Button
                     }
-                    viewModel.verifyAndFinalizeTrip(trip.id, mileage)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !state.isLoading && finalMileage.toIntOrNull() != null && trip.completionPhotos.isNotEmpty()
-            ) {
-                if (state.isLoading) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Total Driver Expenses:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            "$${String.format("%.2f", trip.expenses.sumOf { it.amount })}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Financial Information Section
+                Text("Financial Information", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Money Earned Entry
+                OutlinedTextField(
+                    value = moneyEarned,
+                    onValueChange = { if (!isCompleted) moneyEarned = it },
+                    label = { Text("Money Earned ($)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    placeholder = { Text("e.g., 1500.00") },
+                    leadingIcon = { Icon(Icons.Filled.AttachMoney, contentDescription = null) },
+                    enabled = !isCompleted,
+                    readOnly = isCompleted
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Additional Costs Entry
+                OutlinedTextField(
+                    value = additionalCosts,
+                    onValueChange = { if (!isCompleted) additionalCosts = it },
+                    label = { Text("Additional Costs ($)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    placeholder = { Text("e.g., 50.00") },
+                    leadingIcon = { Icon(Icons.Filled.AttachMoney, contentDescription = null) },
+                    enabled = !isCompleted,
+                    readOnly = isCompleted
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Final Mileage Entry
+                Text("Enter Final Mileage", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = finalMileage,
+                    onValueChange = { if (!isCompleted) finalMileage = it },
+                    label = { Text("Final Mileage") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    placeholder = { Text("e.g., 125000") },
+                    enabled = !isCompleted,
+                    readOnly = isCompleted
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Finalize/Un-finalize Button
+                if (isCompleted) {
+                    // Un-finalize Button (only shown when viewing details)
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.unfinalizeTrip(trip.id)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !state.isLoading,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        if (state.isLoading) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        } else {
+                            Text("Un-finalize Trip")
+                        }
+                    }
                 } else {
-                    Text("Finalize Trip")
+                    // Finalize Button
+                    Button(
+                        onClick = {
+                            val mileage = finalMileage.toIntOrNull()
+                            if (mileage == null) {
+                                // Show error - handled by viewModel
+                                return@Button
+                            }
+                            val earned = moneyEarned.toDoubleOrNull() ?: 0.0
+                            val additional = additionalCosts.toDoubleOrNull() ?: 0.0
+                            viewModel.verifyAndFinalizeTrip(trip.id, mileage, earned, additional)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !state.isLoading && finalMileage.toIntOrNull() != null && trip.completionPhotos.isNotEmpty()
+                    ) {
+                        if (state.isLoading) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        } else {
+                            Text("Finalize Trip")
+                        }
+                    }
                 }
             }
 
             // Success/Error Messages
+            LaunchedEffect(state.successMessage) {
+                state.successMessage?.let {
+                    // Reload trip data after successful finalization
+                    viewModel.loadSingleTrip(tripId)
+                }
+            }
+            
             if (state.successMessage != null) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Card(
@@ -339,7 +505,8 @@ fun TripVerificationScreen(
 @Composable
 fun PhotoGrid(
     photos: Map<String, String>,
-    onPhotoClick: (String, String) -> Unit
+    onPhotoClick: (String, String) -> Unit,
+    isDisabled: Boolean = false
 ) {
     val context = LocalContext.current
     val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
@@ -352,8 +519,19 @@ fun PhotoGrid(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
-                    .clickable { onPhotoClick(label, photoUrl) },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    .then(
+                        if (!isDisabled) {
+                            Modifier.clickable { onPhotoClick(label, photoUrl) }
+                        } else {
+                            Modifier
+                        }
+                    ),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDisabled) 
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f) 
+                    else 
+                        MaterialTheme.colorScheme.surfaceVariant
+                )
             ) {
                 Column(modifier = Modifier.padding(8.dp)) {
                     Row(
@@ -362,14 +540,31 @@ fun PhotoGrid(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Icon(
+                                Icons.Filled.CheckCircle, 
+                                contentDescription = null, 
+                                tint = if (isDisabled) 
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) 
+                                else 
+                                    MaterialTheme.colorScheme.primary
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text(
+                                label, 
+                                style = MaterialTheme.typography.titleSmall, 
+                                fontWeight = FontWeight.Bold,
+                                color = if (isDisabled) 
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f) 
+                                else 
+                                    MaterialTheme.colorScheme.onSurface
+                            )
                         }
-                        TextButton(onClick = { onPhotoClick(label, photoUrl) }) {
-                            Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("View")
+                        if (!isDisabled) {
+                            TextButton(onClick = { onPhotoClick(label, photoUrl) }) {
+                                Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("View")
+                            }
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))

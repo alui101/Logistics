@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -16,11 +16,13 @@ import androidx.navigation.NavController
 import coil.ImageLoader
 import com.google.firebase.auth.FirebaseAuth
 import android.widget.Toast
+import androidx.compose.runtime.remember
 @Composable
 fun AdminDashboard(navController: NavController, auth: FirebaseAuth,onNavigateBack: () -> Unit = {}) {
     val context = LocalContext.current
     val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
     var showCacheClearDialog by remember { mutableStateOf(false) }
+    var showMenuDropdown by remember { mutableStateOf(false) }
     
     Scaffold(
         topBar = {
@@ -32,16 +34,61 @@ fun AdminDashboard(navController: NavController, auth: FirebaseAuth,onNavigateBa
                     actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                 ),
                 actions = {
-                    IconButton(onClick = { showCacheClearDialog = true }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onPrimary)
-                    }
-                    TextButton(onClick = {
-                        auth.signOut()
-                        navController.navigate(Constants.ROUTE_LOGIN) {
-                            popUpTo(0)
+                    Box {
+                        IconButton(onClick = { showMenuDropdown = true }) {
+                            Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = MaterialTheme.colorScheme.onPrimary)
                         }
-                    }) {
-                        Text("Logout", color = MaterialTheme.colorScheme.onPrimary)
+                        DropdownMenu(
+                            expanded = showMenuDropdown,
+                            onDismissRequest = { showMenuDropdown = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Clear Cache") },
+                                onClick = {
+                                    showMenuDropdown = false
+                                    showCacheClearDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Logout") },
+                                onClick = {
+                                    showMenuDropdown = false
+                                    // Log logout before signOut - must complete before signOut
+                                    val currentUser = auth.currentUser
+                                    if (currentUser != null) {
+                                        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                                        db.collection(Constants.COLLECTION_USERS)
+                                            .document(currentUser.uid)
+                                            .get()
+                                            .addOnSuccessListener { doc ->
+                                                val role = doc.getString("role") ?: "unknown"
+                                                AuthLogger.logLogout(currentUser.uid, currentUser.email, role, "BUTTON") {
+                                                    // Only signOut after logout is logged
+                                                    auth.signOut()
+                                                    navController.navigate(Constants.ROUTE_LOGIN) {
+                                                        popUpTo(0)
+                                                    }
+                                                }
+                                            }
+                                            .addOnFailureListener {
+                                                // Log with unknown role, then signOut
+                                                AuthLogger.logLogout(currentUser.uid, currentUser.email, null, "BUTTON") {
+                                                    auth.signOut()
+                                                    navController.navigate(Constants.ROUTE_LOGIN) {
+                                                        popUpTo(0)
+                                                    }
+                                                }
+                                            }
+                                    } else {
+                                        // No user, just signOut
+                                        auth.signOut()
+                                        navController.navigate(Constants.ROUTE_LOGIN) {
+                                            popUpTo(0)
+                                        }
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             )

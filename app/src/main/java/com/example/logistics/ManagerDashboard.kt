@@ -14,7 +14,7 @@ import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -44,6 +44,7 @@ fun TripManagementScreen(
     val context = LocalContext.current
     val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
     var showCacheClearDialog by remember { mutableStateOf(false) }
+    var showMenuDropdown by remember { mutableStateOf(false) }
 
     // -- STATE VARIABLES --
     var showForm by remember { mutableStateOf(false) }
@@ -223,15 +224,59 @@ fun TripManagementScreen(
                 },
                 actions = {
                     if (isManagerRoot && !showForm) {
-                        IconButton(onClick = { showCacheClearDialog = true }) {
-                            Icon(Icons.Filled.Settings, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onPrimary)
+                        Box {
+                            IconButton(onClick = { showMenuDropdown = true }) {
+                                Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = MaterialTheme.colorScheme.onPrimary)
+                            }
+                            DropdownMenu(
+                                expanded = showMenuDropdown,
+                                onDismissRequest = { showMenuDropdown = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Clear Cache") },
+                                    onClick = {
+                                        showMenuDropdown = false
+                                        showCacheClearDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Logout") },
+                                    onClick = {
+                                        showMenuDropdown = false
+                                        // Log logout before signOut - must complete before signOut
+                                        val currentUser = auth.currentUser
+                                        if (currentUser != null) {
+                                            val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                                            db.collection(Constants.COLLECTION_USERS)
+                                                .document(currentUser.uid)
+                                                .get()
+                                                .addOnSuccessListener { doc ->
+                                                    val role = doc.getString("role") ?: "unknown"
+                                                    AuthLogger.logLogout(currentUser.uid, currentUser.email, role, "BUTTON") {
+                                                        // Only signOut after logout is logged
+                                                        viewModel.cleanupListeners()
+                                                        auth.signOut()
+                                                        navController.navigate(Constants.ROUTE_LOGIN) { popUpTo(0) }
+                                                    }
+                                                }
+                                                .addOnFailureListener {
+                                                    // Log with unknown role, then signOut
+                                                    AuthLogger.logLogout(currentUser.uid, currentUser.email, null, "BUTTON") {
+                                                        viewModel.cleanupListeners()
+                                                        auth.signOut()
+                                                        navController.navigate(Constants.ROUTE_LOGIN) { popUpTo(0) }
+                                                    }
+                                                }
+                                        } else {
+                                            // No user, just signOut
+                                            viewModel.cleanupListeners()
+                                            auth.signOut()
+                                            navController.navigate(Constants.ROUTE_LOGIN) { popUpTo(0) }
+                                        }
+                                    }
+                                )
+                            }
                         }
-                        TextButton(onClick = {
-                            // Cleanup listeners before logout to prevent permission errors
-                            viewModel.cleanupListeners()
-                            auth.signOut()
-                            navController.navigate(Constants.ROUTE_LOGIN) { popUpTo(0) }
-                        }) { Text("Logout", color = MaterialTheme.colorScheme.onPrimary) }
                     }
                 }
             )
@@ -392,6 +437,9 @@ fun TripManagementScreen(
                                 onVerify = if (trip.status == "AWAITING_VERIFICATION") {
                                     { navController.navigate("${Constants.ROUTE_TRIP_VERIFICATION}/${trip.id}") }
                                 } else null,
+                                onViewDetails = if (trip.status == "COMPLETED") {
+                                    { navController.navigate("${Constants.ROUTE_TRIP_VERIFICATION}/${trip.id}") }
+                                } else null,
                                 onViewPhotos = {
                                     // Will be handled in the card
                                 }
@@ -410,6 +458,7 @@ fun TripManagementCard(
     onEdit: () -> Unit, 
     onDelete: (() -> Unit)? = null, // Make nullable - only admins can delete
     onVerify: (() -> Unit)? = null,
+    onViewDetails: (() -> Unit)? = null, // For finalized trips
     onViewPhotos: () -> Unit = {}
 ) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -484,17 +533,29 @@ fun TripManagementCard(
                         )
                     }
                     
-                    // Show photo counts
-                    val hasPhotos = trip.startPhotos.isNotEmpty() || trip.completionPhotos.isNotEmpty() || trip.expenses.any { it.receiptPhotoUrl != null }
-                    if (hasPhotos) {
+                    // Show View Details button for completed trips, or View Photos for others
+                    if (trip.status == "COMPLETED" && onViewDetails != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         TextButton(
-                            onClick = { showPhotosDialog = true },
+                            onClick = onViewDetails,
                             contentPadding = PaddingValues(0.dp)
                         ) {
                             Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("View Photos", style = MaterialTheme.typography.bodySmall)
+                            Text("View Details", style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        val hasPhotos = trip.startPhotos.isNotEmpty() || trip.completionPhotos.isNotEmpty() || trip.expenses.any { it.receiptPhotoUrl != null }
+                        if (hasPhotos) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            TextButton(
+                                onClick = { showPhotosDialog = true },
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("View Photos", style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                 }
@@ -509,14 +570,17 @@ fun TripManagementCard(
                             Text("Verify", style = MaterialTheme.typography.labelSmall)
                         }
                     }
-                    Row {
-                        IconButton(onClick = onEdit) {
-                            Icon(Icons.Filled.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.primary)
-                        }
-                        // Only show delete button if onDelete is provided (admins only)
-                        if (onDelete != null) {
-                            IconButton(onClick = { showDeleteConfirm = true }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                    // Don't show edit/delete buttons for completed trips
+                    if (trip.status != "COMPLETED") {
+                        Row {
+                            IconButton(onClick = onEdit) {
+                                Icon(Icons.Filled.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.primary)
+                            }
+                            // Only show delete button if onDelete is provided (admins only)
+                            if (onDelete != null) {
+                                IconButton(onClick = { showDeleteConfirm = true }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                                }
                             }
                         }
                     }

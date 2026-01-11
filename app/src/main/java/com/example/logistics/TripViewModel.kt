@@ -569,19 +569,45 @@ class TripViewModel : ViewModel() {
     }
 
     // Verify and finalize trip (Admin/Manager only)
-    fun verifyAndFinalizeTrip(tripId: String, finalMileage: Int) {
+    fun verifyAndFinalizeTrip(tripId: String, finalMileage: Int, moneyEarned: Double = 0.0, additionalCosts: Double = 0.0) {
+        _uiState.value = _uiState.value.copy(isLoading = true)
+        viewModelScope.launch {
+            try {
+                val updates = mutableMapOf<String, Any>(
+                    "status" to "COMPLETED",
+                    "finalMileage" to finalMileage
+                )
+                
+                if (moneyEarned > 0) {
+                    updates["moneyEarned"] = moneyEarned
+                }
+                
+                if (additionalCosts > 0) {
+                    updates["additionalCosts"] = additionalCosts
+                }
+                
+                db.collection(Constants.COLLECTION_TRIPS).document(tripId).update(updates).await()
+                // Reload the trip to get updated status
+                loadSingleTrip(tripId)
+                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Trip finalized successfully")
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to finalize trip: ${e.localizedMessage}")
+            }
+        }
+    }
+    
+    fun unfinalizeTrip(tripId: String) {
         _uiState.value = _uiState.value.copy(isLoading = true)
         viewModelScope.launch {
             try {
                 db.collection(Constants.COLLECTION_TRIPS).document(tripId).update(
-                    mapOf(
-                        "status" to "COMPLETED",
-                        "finalMileage" to finalMileage
-                    )
+                    mapOf("status" to "AWAITING_VERIFICATION")
                 ).await()
-                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Trip finalized successfully")
+                // Reload the trip to get updated status
+                loadSingleTrip(tripId)
+                _uiState.value = _uiState.value.copy(isLoading = false, successMessage = "Trip un-finalized successfully")
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to finalize trip: ${e.localizedMessage}")
+                _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Failed to un-finalize trip: ${e.localizedMessage}")
             }
         }
     }

@@ -29,6 +29,16 @@ class UserPrefs(context: Context) {
 
     fun getEmail(): String? = prefs.getString("email", null)
     fun getPassword(): String? = prefs.getString("password", null)
+    
+    fun saveLastLoggedInUserId(userId: String) {
+        prefs.edit().putString("last_logged_in_user_id", userId).apply()
+    }
+    
+    fun getLastLoggedInUserId(): String? = prefs.getString("last_logged_in_user_id", null)
+    
+    fun clearLastLoggedInUserId() {
+        prefs.edit().remove("last_logged_in_user_id").apply()
+    }
 
     fun clear() {
         prefs.edit().clear().apply()

@@ -21,6 +21,7 @@ fun AppNavigation(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
+    var firstBackPressTime by remember { mutableLongStateOf(0L) }
     var isNavigating by remember { mutableStateOf(false) }
 
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
@@ -50,9 +51,15 @@ fun AppNavigation(
 
         if (isAtRoot) {
             // At root - double tap to exit
-            if (currentTime - lastBackPressTime < 2000) {
-                context.findActivity()?.finish()
+            val timeSinceFirstPress = currentTime - firstBackPressTime
+            if (timeSinceFirstPress < 2000 && firstBackPressTime > 0) {
+                // Second back press within 2 seconds - exit app
+                firstBackPressTime = 0 // Reset
+                val activity = context.findActivity()
+                activity?.finish()
             } else {
+                // First back press - show message and record time
+                firstBackPressTime = currentTime
                 Toast.makeText(context, "Press back again to exit", Toast.LENGTH_SHORT).show()
             }
         } else {
@@ -92,9 +99,26 @@ fun AppNavigation(
                 context = loginContext,
                 onLogin = { email, password ->
                     auth.signInWithEmailAndPassword(email, password)
-                        .addOnSuccessListener {
+                        .addOnSuccessListener { result ->
                             val prefs = UserPrefs(loginContext)
                             prefs.saveUser(email, password)
+                            
+                            // Log the login - get role from Firestore
+                            val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                            result.user?.uid?.let { userId ->
+                                db.collection(Constants.COLLECTION_USERS)
+                                    .document(userId)
+                                    .get()
+                                    .addOnSuccessListener { doc ->
+                                        val role = doc.getString("role") ?: "unknown"
+                                        AuthLogger.logLogin(userId, email, role)
+                                    }
+                                    .addOnFailureListener {
+                                        // Log with unknown role if we can't fetch it
+                                        AuthLogger.logLogin(userId, email, "unknown")
+                                    }
+                            }
+                            
                             navController.navigate(Constants.ROUTE_LOADING) {
                                 popUpTo(Constants.ROUTE_LOGIN) { inclusive = true }
                             }

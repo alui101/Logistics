@@ -29,7 +29,9 @@ data class Trip(
     val startPhotos: Map<String, String> = emptyMap(), // Pre-trip inspection photos
     val completionPhotos: Map<String, String> = emptyMap(), // End-of-trip inspection photos
     val finalMileage: Int? = null, // Entered by admin/manager after verification
-    val expenses: List<Expense> = emptyList() // List of expenses for this trip
+    val expenses: List<Expense> = emptyList(), // List of expenses for this trip
+    val moneyEarned: Double? = null, // Money earned through trip (entered by admin/manager)
+    val additionalCosts: Double? = null // Additional costs (entered by admin/manager)
 )
 
 data class Expense(

@@ -56,7 +56,7 @@ fun DriverTripDetailScreen(
     // Find the specific trip from the list
     val trip = state.trips.find { it.id == tripId }
     
-    // Periodically refresh trip data if photos are still uploading
+    // Periodically refresh trip data if start photos are still uploading
     LaunchedEffect(trip?.startedAt, trip?.startPhotos?.size, trip?.status) {
         val currentTrip = state.trips.find { it.id == tripId }
         if (currentTrip != null && currentTrip.startedAt != null && currentTrip.status == "PENDING" && currentTrip.startPhotos.isEmpty()) {
@@ -70,6 +70,26 @@ fun DriverTripDetailScreen(
                 val updatedTrip = state.trips.find { it.id == tripId }
                 // Stop refreshing if photos are uploaded or status changed
                 if (updatedTrip == null || updatedTrip.startPhotos.isNotEmpty() || updatedTrip.status != "PENDING") {
+                    shouldContinue = false
+                }
+            }
+        }
+    }
+    
+    // Periodically refresh trip data if completion photos are still uploading
+    LaunchedEffect(trip?.stoppedAt, trip?.completionPhotos?.size, trip?.status) {
+        val currentTrip = state.trips.find { it.id == tripId }
+        if (currentTrip != null && currentTrip.stoppedAt != null && currentTrip.status == "IN_PROGRESS" && currentTrip.completionPhotos.isEmpty()) {
+            // Completion photos are still uploading - refresh trip data every 3 seconds until upload completes
+            var shouldContinue = true
+            while (shouldContinue) {
+                delay(3000)
+                viewModel.loadSingleTrip(tripId)
+                // Check updated state after a brief delay to allow state to update
+                delay(500)
+                val updatedTrip = state.trips.find { it.id == tripId }
+                // Stop refreshing if photos are uploaded or status changed
+                if (updatedTrip == null || updatedTrip.completionPhotos.isNotEmpty() || updatedTrip.status != "IN_PROGRESS") {
                     shouldContinue = false
                 }
             }
@@ -284,22 +304,57 @@ fun DriverTripDetailScreen(
                 }
 
             } else if (trip.status == "IN_PROGRESS") {
-                // Trip is in progress - show expenses and completion
-                Text("Status: IN PROGRESS", style = MaterialTheme.typography.titleLarge)
-                Spacer(modifier = Modifier.height(8.dp))
+                // Check if completion photos are still uploading
+                val completionPhotosStillUploading = trip.stoppedAt != null && trip.status == "IN_PROGRESS" && trip.completionPhotos.isEmpty()
                 
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "You are currently in transit. Drive safely!",
-                        modifier = Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
+                if (completionPhotosStillUploading) {
+                    // Completion photos are still uploading - show message and prevent access
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator()
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "Completion Photos Still Uploading",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Please wait while your completion photos are being uploaded. The trip will be marked as awaiting verification once the upload is complete.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "You can check upload status in the Media Manager.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                } else {
+                    // Trip is in progress - show expenses and completion
+                    Text("Status: IN PROGRESS", style = MaterialTheme.typography.titleLarge)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "You are currently in transit. Drive safely!",
+                            modifier = Modifier.padding(16.dp),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
                 
                 // Expenses Section
                 Row(
@@ -397,7 +452,7 @@ fun DriverTripDetailScreen(
                                 tripId = trip.id,
                                 photoUris = completionPhotos,
                                 onSuccess = {
-                                    Toast.makeText(context, "Trip completion submitted! Awaiting verification...", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Trip completion submitted! Uploading in background...", Toast.LENGTH_LONG).show()
                                     onNavigateBack()
                                 }
                             )
@@ -417,7 +472,7 @@ fun DriverTripDetailScreen(
                         Text("Complete Trip")
                     }
                 }
-                
+                }
             } else if (trip.status == "AWAITING_VERIFICATION") {
                 Text("Status: AWAITING VERIFICATION", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.height(8.dp))
