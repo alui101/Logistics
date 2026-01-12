@@ -75,6 +75,9 @@ dependencies {
         implementation("com.google.firebase:firebase-storage")
         implementation("com.google.firebase:firebase-storage-ktx:20.3.0")
         implementation("io.coil-kt:coil-compose:2.6.0")
+        
+        // Google Places SDK
+        implementation("com.google.android.libraries.places:places:3.4.0")
     }
     implementation("androidx.compose.material:material-icons-extended:1.6.0")
     implementation("androidx.datastore:datastore-preferences:1.1.0")

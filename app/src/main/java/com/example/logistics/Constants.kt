@@ -6,6 +6,7 @@ object Constants {
     const val COLLECTION_TRIPS = "trips"
     const val COLLECTION_VEHICLES = "vehicles"
     const val COLLECTION_AUTH_LOGS = "auth_logs"
+    const val COLLECTION_TRIP_FINALIZATIONS = "trip_finalizations"
 
     // User Roles
     const val ROLE_ADMIN = "admin"

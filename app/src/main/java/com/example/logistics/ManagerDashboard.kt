@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,6 +32,18 @@ import coil.request.CachePolicy
 import coil.size.Size
 import com.google.firebase.auth.FirebaseAuth
 import android.widget.Toast
+import com.google.android.libraries.places.api.Places
+import com.google.android.libraries.places.api.model.Place
+import com.google.android.libraries.places.api.model.AutocompletePrediction
+import com.google.android.libraries.places.api.net.FindAutocompletePredictionsRequest
+import com.google.android.libraries.places.api.net.PlacesClient
+import com.google.android.libraries.places.api.net.FetchPlaceRequest
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 
 @Composable
 fun TripManagementScreen(
@@ -42,9 +55,38 @@ fun TripManagementScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val activity = context.findActivity()
     val imageLoader = remember { ImageLoaderConfig.createImageLoader(context) }
     var showCacheClearDialog by remember { mutableStateOf(false) }
     var showMenuDropdown by remember { mutableStateOf(false) }
+    
+    // Initialize Places SDK and create PlacesClient
+    val placesClient = remember {
+        if (!Places.isInitialized()) {
+            try {
+                // Try to get API key from resources (auto-generated from google-services.json)
+                val apiKey = try {
+                    val resources = context.resources
+                    val apiKeyId = resources.getIdentifier("google_api_key", "string", context.packageName)
+                    if (apiKeyId != 0) {
+                        resources.getString(apiKeyId)
+                    } else {
+                        "AIzaSyDxeP-LmQO0nhpnbe3dJtqSjpl0_rWQmkQ"
+                    }
+                } catch (e: Exception) {
+                    "AIzaSyDxeP-LmQO0nhpnbe3dJtqSjpl0_rWQmkQ"
+                }
+                
+                if (apiKey.isNotBlank()) {
+                    Places.initializeWithNewPlacesApiEnabled(context, apiKey)
+                    android.util.Log.d("ManagerDashboard", "Places SDK initialized successfully with New Places API")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ManagerDashboard", "Failed to initialize Places SDK: ${e.message}", e)
+            }
+        }
+        Places.createClient(context)
+    }
 
     // -- STATE VARIABLES --
     var showForm by remember { mutableStateOf(false) }
@@ -306,10 +348,242 @@ fun TripManagementScreen(
                         .padding(16.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    // Origin & Destination
-                    OutlinedTextField(value = origin, onValueChange = { origin = it }, label = { Text("Origin") }, modifier = Modifier.fillMaxWidth())
+                    // Origin & Destination with Google Places Autocomplete Dropdown
+                    val scope = rememberCoroutineScope()
+                    
+                    // Origin Autocomplete State
+                    var originPredictions by remember { mutableStateOf<List<AutocompletePrediction>>(emptyList()) }
+                    var originHasUserInput by remember { mutableStateOf(false) }
+                    
+                    // Destination Autocomplete State
+                    var destinationPredictions by remember { mutableStateOf<List<AutocompletePrediction>>(emptyList()) }
+                    var destinationHasUserInput by remember { mutableStateOf(false) }
+                    
+                    // Clear predictions when form is opened for editing
+                    LaunchedEffect(isEditMode) {
+                        if (isEditMode) {
+                            originPredictions = emptyList()
+                            destinationPredictions = emptyList()
+                            originHasUserInput = false
+                            destinationHasUserInput = false
+                        }
+                    }
+                    
+                    // Debounce search queries to avoid too many API calls
+                    LaunchedEffect(origin) {
+                        // Only fetch predictions if user has manually typed (not from programmatic updates)
+                        if (!originHasUserInput) {
+                            originPredictions = emptyList()
+                            return@LaunchedEffect
+                        }
+                        if (origin.length >= 2) {
+                            val currentQuery = origin // Capture the current value
+                            delay(300) // Wait 300ms after user stops typing
+                            // Only fetch if the query hasn't changed during the delay
+                            if (origin == currentQuery) {
+                                // Fetch predictions
+                                try {
+                                    android.util.Log.d("ManagerDashboard", "Fetching origin predictions for: $origin")
+                                    val request = FindAutocompletePredictionsRequest.builder()
+                                        .setQuery(origin)
+                                        .build()
+                                    
+                                    val response = withContext(Dispatchers.IO) {
+                                        placesClient.findAutocompletePredictions(request).await()
+                                    }
+                                    
+                                    originPredictions = response.autocompletePredictions
+                                    android.util.Log.d("ManagerDashboard", "Found ${originPredictions.size} origin predictions")
+                                    if (originPredictions.isNotEmpty()) {
+                                        android.util.Log.d("ManagerDashboard", "First prediction: ${originPredictions[0].getPrimaryText(null)?.toString()}")
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ManagerDashboard", "Error fetching origin predictions: ${e.message}", e)
+                                    originPredictions = emptyList()
+                                }
+                            }
+                        } else {
+                            originPredictions = emptyList()
+                        }
+                    }
+                    
+                    LaunchedEffect(destination) {
+                        // Only fetch predictions if user has manually typed (not from programmatic updates)
+                        if (!destinationHasUserInput) {
+                            destinationPredictions = emptyList()
+                            return@LaunchedEffect
+                        }
+                        
+                        if (destination.length >= 2) {
+                            val currentQuery = destination // Capture the current value
+                            delay(300) // Wait 300ms after user stops typing
+                            // Only fetch if the query hasn't changed during the delay
+                            if (destination == currentQuery) {
+                                // Fetch predictions
+                                try {
+                                    android.util.Log.d("ManagerDashboard", "Fetching destination predictions for: $destination")
+                                    val request = FindAutocompletePredictionsRequest.builder()
+                                        .setQuery(destination)
+                                        .build()
+                                    
+                                    val response = withContext(Dispatchers.IO) {
+                                        placesClient.findAutocompletePredictions(request).await()
+                                    }
+                                    
+                                    destinationPredictions = response.autocompletePredictions
+                                    android.util.Log.d("ManagerDashboard", "Found ${destinationPredictions.size} destination predictions")
+                                    if (destinationPredictions.isNotEmpty()) {
+                                        android.util.Log.d("ManagerDashboard", "First prediction: ${destinationPredictions[0].getPrimaryText(null)?.toString()}")
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ManagerDashboard", "Error fetching destination predictions: ${e.message}", e)
+                                    destinationPredictions = emptyList()
+                                }
+                            }
+                        } else {
+                            destinationPredictions = emptyList()
+                        }
+                    }
+                    
+                    // Origin Field with Autocomplete Dropdown
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = origin,
+                            onValueChange = { 
+                                origin = it
+                                originHasUserInput = true // Mark that user has typed
+                                if (it.length < 2) {
+                                    originPredictions = emptyList()
+                                }
+                            },
+                            label = { Text("Origin") },
+                            modifier = Modifier.fillMaxWidth(),
+                            leadingIcon = { Icon(Icons.Filled.LocationOn, contentDescription = null) }
+                        )
+                        
+                        if (originPredictions.isNotEmpty()) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 200.dp)
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    originPredictions.forEach { prediction ->
+                                        DropdownMenuItem(
+                                            text = { 
+                                                Column {
+                                                    Text(
+                                                        text = prediction.getPrimaryText(null)?.toString() ?: "",
+                                                        style = MaterialTheme.typography.bodyMedium
+                                                    )
+                                                    Text(
+                                                        text = prediction.getSecondaryText(null)?.toString() ?: "",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.secondary
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                // Fetch full place details
+                                                scope.launch {
+                                                    try {
+                                                        val placeFields = listOf(Place.Field.ADDRESS, Place.Field.NAME, Place.Field.LAT_LNG)
+                                                        val request = FetchPlaceRequest.newInstance(prediction.placeId, placeFields)
+                                                        val placeResponse = withContext(Dispatchers.IO) {
+                                                            placesClient.fetchPlace(request).await()
+                                                        }
+                                                        val place = placeResponse.place
+                                                        origin = place.address ?: place.name ?: prediction.getPrimaryText(null)?.toString() ?: ""
+                                                        originPredictions = emptyList()
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("ManagerDashboard", "Error fetching place details: ${e.message}", e)
+                                                        origin = prediction.getPrimaryText(null)?.toString() ?: ""
+                                                        originPredictions = emptyList()
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(value = destination, onValueChange = { destination = it }, label = { Text("Destination") }, modifier = Modifier.fillMaxWidth())
+                    
+                    // Destination Field with Autocomplete Dropdown
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = destination,
+                            onValueChange = { 
+                                destination = it
+                                if (it.length < 2) {
+                                    destinationPredictions = emptyList()
+                                }
+                            },
+                            label = { Text("Destination") },
+                            modifier = Modifier.fillMaxWidth(),
+                            leadingIcon = { Icon(Icons.Filled.LocationOn, contentDescription = null) }
+                        )
+                        
+                        if (destinationPredictions.isNotEmpty()) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 200.dp)
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    destinationPredictions.forEach { prediction ->
+                                        DropdownMenuItem(
+                                            text = { 
+                                                Column {
+                                                    Text(
+                                                        text = prediction.getPrimaryText(null)?.toString() ?: "",
+                                                        style = MaterialTheme.typography.bodyMedium
+                                                    )
+                                                    Text(
+                                                        text = prediction.getSecondaryText(null)?.toString() ?: "",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.secondary
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                // Fetch full place details
+                                                scope.launch {
+                                                    try {
+                                                        val placeFields = listOf(Place.Field.ADDRESS, Place.Field.NAME, Place.Field.LAT_LNG)
+                                                        val request = FetchPlaceRequest.newInstance(prediction.placeId, placeFields)
+                                                        val placeResponse = withContext(Dispatchers.IO) {
+                                                            placesClient.fetchPlace(request).await()
+                                                        }
+                                                        val place = placeResponse.place
+                                                        destination = place.address ?: place.name ?: prediction.getPrimaryText(null)?.toString() ?: ""
+                                                        destinationPredictions = emptyList()
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("ManagerDashboard", "Error fetching place details: ${e.message}", e)
+                                                        destination = prediction.getPrimaryText(null)?.toString() ?: ""
+                                                        destinationPredictions = emptyList()
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
 
                     // Load Type

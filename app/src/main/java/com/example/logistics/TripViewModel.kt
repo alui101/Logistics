@@ -633,14 +633,62 @@ class TripViewModel : ViewModel() {
                 }
                 
                 db.collection(Constants.COLLECTION_TRIPS).document(tripId).update(updates).await()
+                
+                // Calculate total expenses (money lost)
+                val totalExpenses = trip.expenses.sumOf { it.amount }
+                val moneyLost = totalExpenses + additionalCosts
+                
+                // Create finalization record for analytics
+                var finalizationFailed = false
+                var finalizationError: String? = null
+                try {
+                    val finalizationData = mapOf(
+                        "tripId" to tripId,
+                        "origin" to trip.origin,
+                        "destination" to trip.destination,
+                        "moneyEarned" to moneyEarned,
+                        "moneyLost" to moneyLost,
+                        "vehicleId" to (trip.vehicleId ?: ""),
+                        "vehicleInfo" to (trip.vehicleInfo ?: ""),
+                        "driverId" to (trip.driverId ?: ""),
+                        "driverName" to (trip.driverName ?: ""),
+                        "mileage" to finalMileage,
+                        "dateFinalized" to com.google.firebase.Timestamp.now()
+                    )
+                    
+                    // Save to trip_finalizations collection
+                    db.collection(Constants.COLLECTION_TRIP_FINALIZATIONS)
+                        .document(tripId)
+                        .set(finalizationData)
+                        .await()
+                    
+                    android.util.Log.d("TripViewModel", "Successfully created finalization record for trip: $tripId")
+                } catch (e: Exception) {
+                    // Log detailed error
+                    finalizationFailed = true
+                    finalizationError = e.message
+                    android.util.Log.e("TripViewModel", "Failed to create finalization record: ${e.message}", e)
+                    android.util.Log.e("TripViewModel", "Error type: ${e.javaClass.simpleName}")
+                    e.printStackTrace()
+                }
+                
                 // Reload the trip to get updated status
                 loadSingleTrip(tripId)
                 
                 // Show appropriate success message
-                val successMsg = if (vehicleUpdateFailed) {
-                    "Trip finalized successfully. Note: Vehicle mileage could not be updated (permission denied). Please update manually."
-                } else {
-                    "Trip finalized successfully"
+                val successMsg = when {
+                    vehicleUpdateFailed && finalizationFailed -> {
+                        "Trip finalized successfully. Warnings: Vehicle mileage could not be updated (permission denied). Finalization record creation failed: ${finalizationError ?: "Unknown error"}"
+                    }
+                    vehicleUpdateFailed -> {
+                        "Trip finalized successfully. Note: Vehicle mileage could not be updated (permission denied). Please update manually."
+                    }
+                    finalizationFailed -> {
+                        "Trip finalized successfully. Warning: Finalization record creation failed: ${finalizationError ?: "Unknown error"}. Please check Firestore permissions."
+                    }
+                    else -> {
+                        "Trip finalized successfully"
+                    }
                 }
                 _uiState.value = _uiState.value.copy(isLoading = false, successMessage = successMsg)
             } catch (e: Exception) {
